@@ -177,6 +177,16 @@ jobs:
             specs: timeline
           - scenario: helm
             specs: helm
+          - scenario: resources
+            specs: resources
+          - scenario: logs
+            specs: logs
+          - scenario: issues
+            specs: issues
+          - scenario: settings
+            specs: settings
+          - scenario: cluster-views
+            specs: cluster-views
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
