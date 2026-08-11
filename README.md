@@ -68,7 +68,7 @@ Repository secrets it needs:
 | Secret | What it is |
 |---|---|
 | `E2E_HUB_LICENSE` | self-hosted license JWT |
-| `GH_APP_ID` / `GH_APP_PK` | the org's GitHub App; must be installed on `radar-hub` and `radar-hub-web` with contents read |
+| `GH_E2E_APP_ID` / `GH_E2E_APP_PK` | the org's GitHub App; must be installed on `radar-hub` and `radar-hub-web` with contents read |
 
 There is deliberately no admin-password secret: `run.sh` generates a throwaway
 credential per run, because Playwright traces record the login form being filled.
