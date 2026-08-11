@@ -1,0 +1,200 @@
+# Browser e2e across radar + radar-hub.
+#
+# Builds the hub, the web app and the radar agent from the CURRENT main of
+# each repo, installs the self-hosted chart onto a throwaway kind cluster,
+# connects a real radar over the tunnel, and drives the UI with Playwright.
+# Runs every 2 hours so an integration break between the three repos surfaces
+# within a couple of hours of landing rather than at release time.
+#
+# This repo is public on purpose: GitHub-hosted runner minutes are free for
+# public repositories, and at 12 runs a day that is the difference between
+# free and roughly $23/month against the org's pool. Nothing secret lives
+# here - the repos under test are checked out per run.
+name: E2E (browser)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 */2 * * *" # every 2 hours, on the default branch
+  workflow_dispatch:
+    inputs:
+      hub_ref:
+        description: "radar-hub ref to test (default: this workflow's ref)"
+        required: false
+      web_ref:
+        description: "radar-hub-web ref to test"
+        required: false
+        default: main
+      radar_ref:
+        description: "radar ref to test"
+        required: false
+        default: main
+      charts_ref:
+        description: "helm-charts ref to install from"
+        required: false
+        default: main
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - default
+    steps:
+      # radar-hub and radar-hub-web are private. The token comes from the
+      # org's GitHub App (the same pair radar-hub's publish workflow uses):
+      # org-owned so it does not break when a person leaves, scoped to exactly
+      # these two repositories, read-only, and expiring an hour after the job.
+      # The App must be installed on both.
+      - name: Mint a scoped token for the private repos
+        id: private_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PK }}
+          owner: skyhook-dev
+          repositories: |
+            radar-hub
+            radar-hub-web
+
+      - name: Checkout this harness
+        uses: actions/checkout@v6
+
+      # Every repo under test goes under the workspace: actions/checkout
+      # refuses any path outside it. run.sh reads their locations from the
+      # *_DIR variables set on the run step.
+      - name: Checkout radar-hub
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-dev/radar-hub
+          ref: ${{ inputs.hub_ref || 'main' }}
+          token: ${{ steps.private_token.outputs.token }}
+          path: .e2e-repos/radar-hub
+
+      - name: Checkout radar-hub-web
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-dev/radar-hub-web
+          ref: ${{ inputs.web_ref || 'main' }}
+          token: ${{ steps.private_token.outputs.token }}
+          path: .e2e-repos/radar-hub-web
+
+      # radar and helm-charts are public, so the default job token reads them
+      # fine - they are in skyhook-io, which the App above is not installed on.
+      - name: Checkout radar
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/radar
+          ref: ${{ inputs.radar_ref || 'main' }}
+          path: .e2e-repos/radar
+
+      - name: Checkout helm-charts
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/helm-charts
+          ref: ${{ inputs.charts_ref || 'main' }}
+          path: .e2e-repos/helm-charts
+
+      - name: Record what is under test
+        run: |
+          for r in .e2e-repos/radar-hub .e2e-repos/radar-hub-web .e2e-repos/radar .e2e-repos/helm-charts; do
+            printf '%-34s %s\n' "$r" "$(git -C "$r" rev-parse --short HEAD)"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Images are built here rather than in run.sh so the layer cache is
+      # shared across scheduled runs. A cold build of all three is the bulk of
+      # this job's wall clock; run.sh skips its own build via SKIP_BUILD.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build hub image
+        uses: docker/build-push-action@v6
+        with:
+          context: .e2e-repos/radar-hub
+          load: true
+          tags: radar-hub:e2e
+          cache-from: type=gha,scope=e2e-hub
+          cache-to: type=gha,mode=max,scope=e2e-hub
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .e2e-repos/radar-hub-web
+          load: true
+          tags: radar-hub-web:e2e
+          cache-from: type=gha,scope=e2e-web
+          cache-to: type=gha,mode=max,scope=e2e-web
+
+      # radar's last Dockerfile stage is `release`, which expects
+      # goreleaser-built binaries in the context - `full` is the from-source one.
+      - name: Build radar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .e2e-repos/radar
+          target: full
+          load: true
+          tags: radar:e2e
+          cache-from: type=gha,scope=e2e-radar
+          cache-to: type=gha,mode=max,scope=e2e-radar
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # No admin-password secret: run.sh generates a throwaway credential per
+      # run. Playwright traces record the login form being filled, so a shared
+      # secret would land inside the uploaded artifacts on every failure.
+      - name: Run browser e2e
+        env:
+          RADAR_HUB_LICENSE: ${{ secrets.E2E_HUB_LICENSE }}
+          SKIP_BUILD: "1"
+          HUB_DIR: ${{ github.workspace }}/.e2e-repos/radar-hub
+          HUB_WEB_DIR: ${{ github.workspace }}/.e2e-repos/radar-hub-web
+          RADAR_DIR: ${{ github.workspace }}/.e2e-repos/radar
+          CHARTS_DIR: ${{ github.workspace }}/.e2e-repos/helm-charts
+        run: ./run.sh all
+
+      - name: Collect diagnostics
+        if: always()
+        run: ./run.sh logs > diagnostics.txt 2>&1 || true
+
+      # Uploaded on success too: the report carries the timeline screenshot and
+      # the matched event rows, which are the only proof anyone can look at that
+      # the timeline actually rendered.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.scenario }}
+          path: |
+            playwright-report/
+            test-results/
+            diagnostics.txt
+          retention-days: 7
+
+      # Tolerant on purpose: when the job fails before kind is installed there
+      # is nothing to delete, and a teardown error would mask the real failure.
+      - name: Tear down
+        if: always()
+        run: ./run.sh down || true

@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# Browser e2e for the radar + radar-hub integration.
+#
+# Stands up a throwaway kind cluster, installs the self-hosted hub from the
+# helm-charts source tree using images built from the CURRENT main of each
+# repo, and drives the web UI with Playwright. Same script runs on a laptop
+# and on a CI runner - CI only differs in where the repos under test are
+# checked out (see *_DIR below).
+#
+# Usage:
+#   ./run.sh up      # build images + create cluster + install hub + connect radar
+#   ./run.sh test    # run the Playwright specs against a running stack
+#   ./run.sh all     # up + test  (default)
+#   ./run.sh down    # delete the cluster and stop the port-forward
+#
+# Required:
+#   RADAR_HUB_LICENSE   self-hosted license JWT. Without it the web UI is
+#                       gated on a license-required screen and nothing else
+#                       can be tested.
+#
+# Optional (defaults assume sibling checkouts next to this repo):
+#   HUB_DIR=../radar-hub   HUB_WEB_DIR=../radar-hub-web
+#   CHARTS_DIR=../helm-charts   RADAR_DIR=../radar
+#   CLUSTER=radar-e2e   NS=radar-hub   HUB_PORT=18080
+#   E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+DIR="."
+
+HUB_DIR="${HUB_DIR:-../radar-hub}"
+HUB_WEB_DIR="${HUB_WEB_DIR:-../radar-hub-web}"
+CHARTS_DIR="${CHARTS_DIR:-../helm-charts}"
+RADAR_DIR="${RADAR_DIR:-../radar}"
+CLUSTER="${CLUSTER:-radar-e2e}"
+NS="${NS:-radar-hub}"
+RADAR_NS="${RADAR_NS:-radar}"
+DEMO_NS="${DEMO_NS:-e2e-demo}"
+DEMO_DEPLOY="${DEMO_DEPLOY:-timeline-probe}"
+CLUSTER_DISPLAY_NAME="${CLUSTER_DISPLAY_NAME:-e2e-kind}"
+HUB_PORT="${HUB_PORT:-18080}"
+HUB_URL="http://localhost:${HUB_PORT}"
+KUBE_CONTEXT="kind-${CLUSTER}"
+K="kubectl --context ${KUBE_CONTEXT}"
+PF_PID_FILE="$DIR/.run/port-forward.pid"
+CLUSTER_ID_FILE="$DIR/.run/cluster-id"
+
+E2E_ADMIN_EMAIL="${E2E_ADMIN_EMAIL:-e2e-admin@skyhook.io}"
+ADMIN_PASSWORD_FILE="$DIR/.run/admin-password"
+
+# The admin password is generated per run rather than supplied as a CI secret.
+# Playwright traces and videos record the login form being filled, so a shared
+# secret would end up inside artifacts on every failure; a throwaway credential
+# for a throwaway cluster cannot leak anything that outlives the run. `up`
+# writes it, `test` reads it back.
+resolve_admin_password() {
+  if [ -n "${E2E_ADMIN_PASSWORD:-}" ]; then return 0; fi
+  if [ -s "$ADMIN_PASSWORD_FILE" ]; then
+    E2E_ADMIN_PASSWORD="$(cat "$ADMIN_PASSWORD_FILE")"
+  else
+    mkdir -p "$DIR/.run"
+    E2E_ADMIN_PASSWORD="e2e-$(openssl rand -hex 16)"
+    printf '%s' "$E2E_ADMIN_PASSWORD" > "$ADMIN_PASSWORD_FILE"
+    chmod 600 "$ADMIN_PASSWORD_FILE"
+  fi
+}
+
+say() { printf "\n\033[36m== %s ==\033[0m\n" "$*"; }
+die() { printf "\033[31m%s\033[0m\n" "$*" >&2; exit 1; }
+
+require_license() {
+  [ -n "${RADAR_HUB_LICENSE:-}" ] || die "RADAR_HUB_LICENSE is not set - the hub UI would show the license-required screen."
+}
+
+build_images() {
+  # CI builds the three images with cache-aware actions and sets SKIP_BUILD=1.
+  if [ "${SKIP_BUILD:-0}" = "1" ]; then
+    say "skipping image build (SKIP_BUILD=1) - expecting radar-hub:e2e, radar-hub-web:e2e, radar:e2e"
+    return 0
+  fi
+  say "build hub + web + radar images from source"
+  [ -d "$HUB_DIR" ] || die "hub repo not found at $HUB_DIR (set HUB_DIR)"
+  [ -d "$HUB_WEB_DIR" ] || die "web repo not found at $HUB_WEB_DIR (set HUB_WEB_DIR)"
+  [ -d "$RADAR_DIR" ] || die "radar repo not found at $RADAR_DIR (set RADAR_DIR)"
+  docker build -q -t radar-hub:e2e "$HUB_DIR" >/dev/null
+  docker build -q -t radar-hub-web:e2e "$HUB_WEB_DIR" >/dev/null
+  # --target full is required: radar's last stage is `release`, which expects
+  # goreleaser-built binaries in the context, so a bare `docker build` fails.
+  docker build -q --target full -t radar:e2e "$RADAR_DIR" >/dev/null
+}
+
+up() {
+  require_license
+  resolve_admin_password
+  [ -d "$CHARTS_DIR/charts/radar-hub" ] || die "chart not found at $CHARTS_DIR/charts/radar-hub (set CHARTS_DIR)"
+  mkdir -p "$DIR/.run"
+
+  build_images
+
+  say "create kind cluster '$CLUSTER'"
+  kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 120s
+  kind load docker-image radar-hub:e2e radar-hub-web:e2e radar:e2e --name "$CLUSTER"
+
+  # The chart pins pods to amd64 nodes. A kind node inherits the host
+  # architecture, so on Apple Silicon that selector leaves every pod Pending.
+  # Pin to whatever this node actually is instead of clearing the selector.
+  local arch
+  arch="$($K get node -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}')"
+
+  say "install radar-hub chart (arch=$arch)"
+  cat > "$DIR/.run/values.yaml" <<EOF
+image:
+  hub:
+    repository: radar-hub
+    tag: e2e
+    pullPolicy: IfNotPresent
+  web:
+    repository: radar-hub-web
+    tag: e2e
+    pullPolicy: IfNotPresent
+license:
+  key: ${RADAR_HUB_LICENSE}
+postgres:
+  bundled:
+    enabled: true
+    persistence:
+      size: 1Gi
+hub:
+  publicURL: ${HUB_URL}
+  cookiePassword: $(openssl rand -base64 48 | tr -d '\n')
+  replicas: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+    kubernetes.io/arch: ${arch}
+web:
+  nodeSelector:
+    kubernetes.io/os: linux
+    kubernetes.io/arch: ${arch}
+  # Radar refuses a plain ws:// tunnel to anything but a loopback host, and the
+  # in-cluster Service name is not loopback. The chart's self-signed listener is
+  # the documented trial path for exactly this; radar dials it with
+  # cloud.insecureSkipVerify. The browser keeps using the plain-http port.
+  tls:
+    selfSigned: true
+auth:
+  breakGlass:
+    email: ${E2E_ADMIN_EMAIL}
+    password: ${E2E_ADMIN_PASSWORD}
+service:
+  web:
+    type: ClusterIP
+EOF
+  helm upgrade --install radar-hub "$CHARTS_DIR/charts/radar-hub" \
+    --kube-context "kind-${CLUSTER}" \
+    --namespace "$NS" --create-namespace \
+    -f "$DIR/.run/values.yaml" --wait --timeout 10m
+
+  $K -n "$NS" rollout status deploy/radar-hub-hub --timeout=300s
+  $K -n "$NS" rollout status deploy/radar-hub-web --timeout=300s
+  port_forward
+  seed_workload
+  connect_cluster
+}
+
+# A workload for the timeline specs to change. Created before radar connects;
+# the specs make the change themselves so the event is provably theirs.
+seed_workload() {
+  say "seed demo workload ${DEMO_NS}/${DEMO_DEPLOY}"
+  $K create namespace "$DEMO_NS" --dry-run=client -o yaml | $K apply -f - >/dev/null
+  $K -n "$DEMO_NS" create deployment "$DEMO_DEPLOY" --image=registry.k8s.io/pause:3.9 --replicas=2 \
+    --dry-run=client -o yaml | $K apply -f - >/dev/null
+  $K -n "$DEMO_NS" rollout status "deploy/$DEMO_DEPLOY" --timeout=120s
+}
+
+hub_api() {
+  # $1=method $2=path; body on stdin when given. X-Hub-Auth satisfies the CSRF
+  # guard for non-browser callers (the browser uses Origin instead).
+  local method="$1" path="$2"
+  curl -sS -b "$DIR/.run/cookies.txt" -c "$DIR/.run/cookies.txt" \
+    -H 'Content-Type: application/json' -H 'X-Hub-Auth: 1' \
+    -X "$method" "${HUB_URL}${path}" "${@:3}"
+}
+
+connect_cluster() {
+  say "register cluster '$CLUSTER_DISPLAY_NAME' and install radar"
+  rm -f "$DIR/.run/cookies.txt"
+  hub_api POST /api/auth/break-glass/login \
+    -d "{\"email\":\"${E2E_ADMIN_EMAIL}\",\"password\":\"${E2E_ADMIN_PASSWORD}\"}" >/dev/null
+
+  local existing cluster_id token
+  existing="$(hub_api GET /api/clusters | jq -r ".[]? | select(.name==\"$CLUSTER_DISPLAY_NAME\") | .id" | head -1)"
+  if [ -n "$existing" ]; then
+    cluster_id="$existing"
+    token="$(hub_api POST "/api/clusters/$cluster_id/rotate-token" | jq -r '.token')"
+  else
+    local created
+    created="$(hub_api POST /api/clusters -d "{\"name\":\"$CLUSTER_DISPLAY_NAME\"}")"
+    cluster_id="$(echo "$created" | jq -r '.cluster.id // .id')"
+    token="$(echo "$created" | jq -r '.token')"
+  fi
+  [ -n "$cluster_id" ] && [ "$token" != "null" ] || die "failed to register a cluster with the hub"
+  echo "$cluster_id" > "$CLUSTER_ID_FILE"
+
+  helm upgrade --install radar "$RADAR_DIR/deploy/helm/radar" \
+    --kube-context "$KUBE_CONTEXT" \
+    --namespace "$RADAR_NS" --create-namespace \
+    --set image.repository=radar --set image.tag=e2e \
+    --set cloud.enabled=true \
+    --set "cloud.url=wss://radar-hub-web.${NS}.svc.cluster.local/agent" \
+    --set "cloud.clusterName=${CLUSTER_DISPLAY_NAME}" \
+    --set "cloud.token=${token}" \
+    --set cloud.insecureSkipVerify=true \
+    --wait --timeout 10m >/dev/null
+  $K -n "$RADAR_NS" rollout status deploy/radar --timeout=300s
+
+  say "wait for the tunnel to report connected"
+  local status=""
+  for _ in $(seq 1 40); do
+    status="$(hub_api GET /api/clusters | jq -r ".[]? | select(.id==\"$cluster_id\") | .status")"
+    [ "$status" = "connected" ] && { echo "  cluster $cluster_id is connected"; return 0; }
+    sleep 3
+  done
+  die "cluster never reached connected (last status: ${status:-unknown})"
+}
+
+port_forward() {
+  stop_port_forward
+  say "port-forward $HUB_URL -> web service"
+  # Supervised: kubectl port-forward gives up on its own (pod churn, idle
+  # resets). Unattended, a dead forward turns every later spec into a
+  # connection error that looks like a product failure.
+  ( while true; do
+      $K -n "$NS" port-forward svc/radar-hub-web "${HUB_PORT}:80" >>"$DIR/.run/port-forward.log" 2>&1
+      echo "port-forward exited, restarting" >>"$DIR/.run/port-forward.log"
+      sleep 1
+    done ) &
+  echo $! > "$PF_PID_FILE"
+  for _ in $(seq 1 30); do
+    curl -sf "$HUB_URL" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "hub web not reachable at $HUB_URL - see $DIR/.run/port-forward.log"
+}
+
+stop_port_forward() {
+  [ -f "$PF_PID_FILE" ] || return 0
+  # Kill the supervisor's process group so the kubectl child goes with it.
+  kill -- "-$(cat "$PF_PID_FILE")" 2>/dev/null || kill "$(cat "$PF_PID_FILE")" 2>/dev/null || true
+  pkill -f "port-forward svc/radar-hub-web ${HUB_PORT}:80" 2>/dev/null || true
+  rm -f "$PF_PID_FILE"
+}
+
+run_tests() {
+  resolve_admin_password
+  curl -sf "$HUB_URL" >/dev/null 2>&1 || port_forward
+  say "playwright"
+  cd "$DIR"
+  [ -d node_modules ] || npm ci --no-audit --no-fund
+  # --with-deps installs the system libraries Chromium needs; it is a no-op on
+  # macOS and needs sudo on Linux, so fall back to the browser-only install.
+  npx playwright install --with-deps chromium >/dev/null 2>&1 || npx playwright install chromium
+  HUB_URL="$HUB_URL" \
+    E2E_ADMIN_EMAIL="$E2E_ADMIN_EMAIL" E2E_ADMIN_PASSWORD="$E2E_ADMIN_PASSWORD" \
+    CLUSTER_ID="$(cat "$REPO_ROOT/$CLUSTER_ID_FILE" 2>/dev/null)" \
+    KUBE_CONTEXT="$KUBE_CONTEXT" DEMO_NS="$DEMO_NS" DEMO_DEPLOY="$DEMO_DEPLOY" \
+    npx playwright test
+  cd "$REPO_ROOT"
+}
+
+dump_diagnostics() {
+  say "diagnostics"
+  $K -n "$NS" get pods -o wide || true
+  $K -n "$NS" logs deploy/radar-hub-hub --tail=100 || true
+}
+
+down() {
+  stop_port_forward
+  kind delete cluster --name "$CLUSTER"
+}
+
+case "${1:-all}" in
+  up)    up ;;
+  test)  run_tests ;;
+  all)   up; run_tests ;;
+  down)  down ;;
+  logs)  dump_diagnostics ;;
+  *) echo "usage: $0 {up|test|all|down|logs}"; exit 2 ;;
+esac
