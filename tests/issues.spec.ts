@@ -166,18 +166,18 @@ test('a broken workload is detected and surfaces on the fleet Issues page, attri
   // workload AND its namespace - "attributed to it", not just "something
   // matched text on the page".
   await page.goto(`/issues?q=${encodeURIComponent(WORKLOAD_NAME)}`);
+  // Wait for the row rather than reloading in a loop. The page polls the fleet
+  // endpoints itself, so a reload every couple of seconds does two harmful
+  // things on a slower machine: it throws away an in-flight fetch before the
+  // data lands (the page can never finish loading, so the row never appears),
+  // and each reload spends several requests from the shared 30/min fleet
+  // budget. A single navigation plus a patient wait tests the same thing.
   await expect
-    .poll(
-      async () => {
-        await page.reload();
-        return page.getByText(`${NAMESPACE} / ${WORKLOAD_NAME}`).count();
-      },
-      {
-        message: `Issues page never showed a row for ${NAMESPACE}/${WORKLOAD_NAME} even though the fleet issues API reported it`,
-        timeout: 30_000,
-        intervals: [2000, 3000, 5000],
-      },
-    )
+    .poll(() => page.getByText(`${NAMESPACE} / ${WORKLOAD_NAME}`).count(), {
+      message: `Issues page never showed a row for ${NAMESPACE}/${WORKLOAD_NAME} even though the fleet issues API reported it`,
+      timeout: 60_000,
+      intervals: [1000, 2000, 3000, 5000],
+    })
     .toBeGreaterThan(0);
 
   await testInfo.attach('issues-page.png', {

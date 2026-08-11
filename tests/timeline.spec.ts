@@ -100,22 +100,17 @@ test('the timeline page renders the cluster timeline', async ({ page }, testInfo
   // rendered but the view did not.
   await expect(page.getByTestId('strip-histogram')).toBeVisible();
 
-  // And the change we just made is on it, by resource name. Reloading is what
-  // a user would do; polling the page keeps this honest about how long the
-  // path actually takes.
+  // And the change we just made is on it, by resource name. Waiting rather
+  // than reloading in a loop: on a slower machine a reload every few seconds
+  // discards the in-flight fetch before its data lands, so the page never
+  // finishes loading and the row can never appear - a self-inflicted failure
+  // that looks exactly like a broken timeline.
   await expect
-    .poll(
-      async () => {
-        await page.reload();
-        await expect(page.getByTestId('strip-histogram')).toBeVisible();
-        return page.getByText(demoDeployment).count();
-      },
-      {
-        message: `timeline page never showed ${demoDeployment} after scaling it to ${target} replicas`,
-        timeout: 90_000,
-        intervals: [3000, 5000],
-      },
-    )
+    .poll(() => page.getByText(demoDeployment).count(), {
+      message: `timeline page never showed ${demoDeployment} after scaling it to ${target} replicas`,
+      timeout: 90_000,
+      intervals: [1000, 2000, 3000, 5000],
+    })
     .toBeGreaterThan(0);
 
   // The screenshot is the point of running a browser at all: it is the only
