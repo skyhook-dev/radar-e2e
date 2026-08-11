@@ -42,12 +42,20 @@ behaves the same on a laptop and on a CI runner.
 
 ## What it covers
 
-1. **Sign-in** — break-glass admin reaches the authenticated app shell, and the org the hub
-   seeds from the license claim exists.
-2. **Timeline** — the harness connects a real radar to the hub over the tunnel, then the specs
-   change a workload with kubectl and assert the change reaches both the hub's timeline
+Each scenario runs as its own CI job with its own cluster, so they finish in the time of
+the slowest rather than the sum, and a wedged cluster cannot take the others down. Locally,
+`SPECS=timeline ./run.sh test` runs one of them.
+
+1. **Sign-in** (`smoke`) — break-glass admin reaches the authenticated app shell, and the org
+   the hub seeds from the license claim exists.
+2. **Timeline** (`timeline`) — the harness connects a real radar over the tunnel, then the
+   specs change a workload with kubectl and assert the change reaches both the hub's timeline
    endpoint and the timeline page. The specs cause the change themselves; asserting over
    pre-existing events would pass against a stale store.
+3. **Helm** (`helm`) — the releases the harness installed are listed on the Helm page with
+   their chart version and status. A different path from the timeline: release records live
+   in cluster Secrets behind their own RBAC. Expected releases come from `helm list` against
+   the same cluster, not from a fixture, so the assertion tracks reality.
 
 Not covered: hub-side timeline retention. `HUB_TIMELINE_BACKEND` is never set by the chart
 (and there is no `extraEnv`), so retention is off and `/c/{id}/api/timeline/*` delegates to

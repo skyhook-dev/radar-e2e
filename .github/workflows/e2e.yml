@@ -41,14 +41,12 @@ on:
         default: main
 
 jobs:
-  e2e:
+  # Build once. The scenarios below each need the same three images, and
+  # rebuilding them per scenario would triple the work for no extra coverage.
+  # This is also the only job that touches private source.
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario:
-          - default
     steps:
       # radar-hub and radar-hub-web are private. The token comes from the
       # org's GitHub App (the same pair radar-hub's publish workflow uses):
@@ -145,6 +143,66 @@ jobs:
           cache-from: type=gha,scope=e2e-radar
           cache-to: type=gha,mode=max,scope=e2e-radar
 
+      # Ship the images to the scenario jobs as one artifact rather than having
+      # each of them rebuild from the layer cache: downloading ~350MB beats
+      # re-running a Go build and an npm install three times over.
+      - name: Export images
+        run: docker save radar-hub:e2e radar-hub-web:e2e radar:e2e | gzip > images.tar.gz
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-images
+          path: images.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  # One scenario per job, each with its own cluster: a scenario that wedges its
+  # cluster cannot take the others down with it, and they finish in the time of
+  # the slowest rather than the sum. Adding a scenario is one list entry.
+  #
+  # These jobs never check out private source - they run prebuilt images
+  # against the two public repos (the chart and radar's chart).
+  e2e:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: sign-in
+            specs: smoke
+          - scenario: timeline
+            specs: timeline
+          - scenario: helm
+            specs: helm
+    steps:
+      - name: Checkout this harness
+        uses: actions/checkout@v6
+
+      - name: Checkout radar
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/radar
+          ref: ${{ inputs.radar_ref || 'main' }}
+          path: .e2e-repos/radar
+
+      - name: Checkout helm-charts
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/helm-charts
+          ref: ${{ inputs.charts_ref || 'main' }}
+          path: .e2e-repos/helm-charts
+
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-images
+
+      - name: Load images
+        run: gunzip -c images.tar.gz | docker load
+
       - name: Install kind
         uses: helm/kind-action@v1
         with:
@@ -169,10 +227,10 @@ jobs:
         env:
           RADAR_HUB_LICENSE: ${{ secrets.E2E_HUB_LICENSE }}
           SKIP_BUILD: "1"
-          HUB_DIR: ${{ github.workspace }}/.e2e-repos/radar-hub
-          HUB_WEB_DIR: ${{ github.workspace }}/.e2e-repos/radar-hub-web
           RADAR_DIR: ${{ github.workspace }}/.e2e-repos/radar
           CHARTS_DIR: ${{ github.workspace }}/.e2e-repos/helm-charts
+          CLUSTER: e2e-${{ matrix.scenario }}
+          SPECS: ${{ matrix.specs }}
         run: ./run.sh all
 
       - name: Collect diagnostics

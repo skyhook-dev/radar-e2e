@@ -23,6 +23,18 @@ export function kubectl(...args: string[]): string {
   return execFileSync('kubectl', [...base, ...args], { encoding: 'utf8' }).trim();
 }
 
+/** Same idea for helm: the expected releases come from the cluster, not a fixture. */
+export function helm(...args: string[]): string {
+  const base = kubeContext ? ['--kube-context', kubeContext] : [];
+  return execFileSync('helm', [...base, ...args], { encoding: 'utf8' }).trim();
+}
+
+export type HelmRelease = { name: string; namespace: string; chart: string; status: string };
+
+export function installedHelmReleases(): HelmRelease[] {
+  return JSON.parse(helm('list', '--all-namespaces', '-o', 'json')) as HelmRelease[];
+}
+
 export function requireAdminCredentials() {
   if (!adminEmail || !adminPassword) {
     throw new Error('E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD must be set');

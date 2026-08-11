@@ -23,6 +23,8 @@
 #   CHARTS_DIR=../helm-charts   RADAR_DIR=../radar
 #   CLUSTER=radar-e2e   NS=radar-hub   HUB_PORT=18080
 #   E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD
+#   SPECS               Playwright filter, e.g. SPECS=timeline. Empty runs all.
+#                       CI gives each scenario its own job, cluster and port.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -260,11 +262,12 @@ run_tests() {
   # --with-deps installs the system libraries Chromium needs; it is a no-op on
   # macOS and needs sudo on Linux, so fall back to the browser-only install.
   npx playwright install --with-deps chromium >/dev/null 2>&1 || npx playwright install chromium
+  # shellcheck disable=SC2086 - SPECS is a deliberate word-split filter list.
   HUB_URL="$HUB_URL" \
     E2E_ADMIN_EMAIL="$E2E_ADMIN_EMAIL" E2E_ADMIN_PASSWORD="$E2E_ADMIN_PASSWORD" \
     CLUSTER_ID="$(cat "$REPO_ROOT/$CLUSTER_ID_FILE" 2>/dev/null)" \
     KUBE_CONTEXT="$KUBE_CONTEXT" DEMO_NS="$DEMO_NS" DEMO_DEPLOY="$DEMO_DEPLOY" \
-    npx playwright test
+    npx playwright test ${SPECS:-}
   cd "$REPO_ROOT"
 }
 
