@@ -217,7 +217,10 @@ for (const shot of shots) {
   byScenario.set(shot.scenario, scenario);
 }
 
-const scenarios = [...byScenario.keys()].sort();
+// A scenario with recordings but no screenshots still gets a section: `mcp`
+// tests an API surface and takes no pictures, and dropping it here would ship
+// its recordings inside the artifact with nothing in the page pointing at them.
+const scenarios = [...new Set([...byScenario.keys(), ...videosByScenario.keys()])].sort();
 // A surface is one screen; a screenshot is one image of it. With both themes
 // captured on both variants a single surface can be four images, so reporting
 // only one of the two numbers reads as if most of the run went missing.
@@ -365,11 +368,18 @@ const html = `<!doctype html>
   </p>
 ${scenarios
   .map((scenario) => {
-    const surfaces = [...byScenario.get(scenario).entries()].sort(([a], [b]) => a.localeCompare(b));
+    const surfaces = [...(byScenario.get(scenario)?.entries() ?? [])].sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
     const errs = consoleErrors[scenario];
+    const recs = videosByScenario.get(scenario)?.length ?? 0;
+    const counts = [
+      surfaces.length ? `${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}` : '',
+      recs ? `${recs} recording${recs === 1 ? '' : 's'}` : '',
+    ].filter(Boolean);
     return `  <section id="${esc(scenario)}">
     <h2>${esc(title(scenario))}</h2>
-    <p class="hint">${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}</p>
+    <p class="hint">${counts.join(' &middot; ') || 'nothing captured'}${surfaces.length ? '' : ' - this scenario takes no screenshots'}</p>
 ${errs ? `    <div class="warn"><strong>Console errors during this scenario:</strong><br><code>${errs.slice(0, 6).map(esc).join('<br>')}</code></div>\n` : ''}${surfaces
       .map(
         ([surface, v]) => `    <div class="surface">
