@@ -127,7 +127,7 @@ test('the hub reports a cluster as disconnected once its agent stops, not stale-
 
   // Cluster-scoped data must fail honestly rather than serve a cached answer
   // that looks live.
-  const proxied = await page.request.get(`/c/${clusterId}/api/overview`);
+  const proxied = await page.request.get(`/c/${clusterId}/api/capacity`);
   expect(
     proxied.ok(),
     'the hub served a cluster-scoped response while the cluster was disconnected - stale data presented as live is worse than an error',
@@ -146,7 +146,7 @@ test('a cluster reconnects on its own once its agent comes back', async ({ page 
 
   // Reconnected has to mean usable, not just green.
   await expect
-    .poll(async () => (await page.request.get(`/c/${clusterId}/api/overview`)).status(), {
+    .poll(async () => (await page.request.get(`/c/${clusterId}/api/capacity`)).status(), {
       message: 'cluster-scoped requests still fail after the hub reported the cluster reconnected',
       timeout: 60_000,
       intervals: [2_000],
