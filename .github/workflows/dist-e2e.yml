@@ -1,3 +1,33 @@
+# Distribution end-to-end tests for the published radar artifacts.
+#
+# Nothing here builds from source: every job installs what a user would install,
+# through the channel that user would use, and checks it works. That is a
+# different question from "does main work", and it fails in different ways -
+# stale manifests, unsigned apps, installers that verify nothing they download.
+#
+# Structure: one cheap job resolves the latest published release, then every
+# other job fans out from it in parallel. Public repo, so Linux, macOS and
+# Windows runners are all free.
+name: Distribution e2e
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Daily: a tap, bucket or manifest can drift without anyone cutting a
+    # release, and a day is a reasonable time to find out.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to test, without the leading v (default: latest release)"
+        required: false
+
 
 jobs:
   resolve-version:
