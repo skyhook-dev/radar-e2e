@@ -1,5 +1,5 @@
 import { test, expect, request as playwrightRequest, type Page } from '@playwright/test';
-import { authStatePath } from './helpers';
+import { authStatePath, captureSurface } from './helpers';
 
 // The cluster-onboarding flow an actual customer walks - as opposed to every
 // other spec in this suite, which connects its cluster by calling the API
@@ -137,10 +137,7 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
   // cluster - the opposite of "freshly minted".
   expect(['never_connected', 'disconnected']).toContain(status.status);
 
-  await testInfo.attach('install-wizard.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'install-wizard-helm-cmd');
 });
 
 test('the /connect/:id page drives a real Cloud Connect request through approval, exactly what the CLI needs', async ({
@@ -199,10 +196,7 @@ test('the /connect/:id page drives a real Cloud Connect request through approval
   await expect(page.getByText(clusterName, { exact: false })).toBeVisible();
   await expect(page.getByText('Kubernetes 1.31.0', { exact: false })).toBeVisible();
 
-  await testInfo.attach('connect-consent-card.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'connect-approval-page');
 
   const approveResponsePromise = page.waitForResponse(
     (res) => res.url().includes(`/api/connect/requests/${created.request_id}/approve`) && res.request().method() === 'POST',

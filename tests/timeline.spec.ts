@@ -4,8 +4,7 @@ import {
   clusterId,
   demoDeployment,
   demoNamespace,
-  kubectl,
-} from './helpers';
+  kubectl, captureSurface } from './helpers';
 
 // Timeline end-to-end. The chain under test is:
 //
@@ -115,8 +114,5 @@ test('the timeline page renders the cluster timeline', async ({ page }, testInfo
 
   // The screenshot is the point of running a browser at all: it is the only
   // artifact that shows the timeline as a user would see it.
-  await testInfo.attach('timeline-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'timeline-change-rendered');
 });

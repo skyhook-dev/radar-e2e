@@ -305,7 +305,13 @@ run_tests() {
   # --with-deps installs the system libraries Chromium needs; it is a no-op on
   # macOS and needs sudo on Linux, so fall back to the browser-only install.
   npx playwright install --with-deps chromium >/dev/null 2>&1 || npx playwright install chromium
+  # Screenshots land in visual/<scenario>/ so the gallery can group them by
+  # scenario and pair each surface against the other variant's copy.
+  local visual_dir="$REPO_ROOT/visual/${SCENARIO:-${SPECS:-all}}"
+  rm -rf "$visual_dir"; mkdir -p "$visual_dir"
+
   # shellcheck disable=SC2086 - SPECS is a deliberate word-split filter list.
+  VISUAL_DIR="$visual_dir" VARIANT="$VARIANT" \
   HUB_URL="$HUB_URL" \
     E2E_ADMIN_EMAIL="$E2E_ADMIN_EMAIL" E2E_ADMIN_PASSWORD="$E2E_ADMIN_PASSWORD" \
     CLUSTER_ID="$(cat "$REPO_ROOT/$CLUSTER_ID_FILE" 2>/dev/null)" \

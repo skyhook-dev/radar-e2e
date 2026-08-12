@@ -3,23 +3,30 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
+import { assertClusterConnected, captureSurface, kubectl } from './helpers';
 
-// Network diagnostics ("Diagnose" / "Reachability"). radar can probe whether a
-// workload is actually reachable and report a verdict - Service, Ingress,
-// HTTPRoute, Gateway. The whole point of the feature is that a wrong-but-
-// confident verdict is worse than no verdict, so this spec builds THREE
-// Services with known, deliberately different real outcomes and checks radar's
-// verdict against ground truth established independently via kubectl/exec -
-// never against a fixture.
+// Network diagnostics ("Diagnose" / "Reachability"). radar can probe whether
+// a workload is actually reachable and report a verdict. This spec builds
+// THREE Services with known, deliberately different real outcomes and checks
+// radar's verdict against ground truth established independently via
+// kubectl/exec - never against a fixture.
 //
-// The chain under test:
-//   kubectl creates Services with different real reachability -> radar's
-//   in-cluster probe (internal/trace/probes.go) dials them for real (radar runs
-//   AS a pod in this cluster, so DetectVantage() returns in-cluster, not local -
-//   confirmed via runVantage in the API response) -> the hub proxies
-//   GET /c/{id}/api/trace/{Kind}/{ns}/{name}?probe=true to radar -> the
-//   Reachability tab renders the same verdict/headline the API returns.
+// IMPORTANT DIFFERENCE FROM THE HUB'S EQUIVALENT SUITE: this binary runs on
+// the machine driving the test, not as a Pod inside the cluster. probe.
+// DetectVantage() keys off KUBERNETES_SERVICE_HOST, which is only set inside
+// a Pod - so every probe here runs from vantage "local" and reaches the
+// Service through the kube-apiserver's services/proxy subresource, not a
+// direct in-cluster dial. That is a WEAKER, indirect signal by design (the
+// apiserver relaying a request proves something answers, not that the
+// ordinary Service/CNI data path works) - confirmed live against this
+// harness: verdict/headline/confidence read "reached via API server" /
+// "indirect", never "healthy" / "real". A CLI user gets the stronger,
+// real-data-path verdict only by clicking "Test in-cluster" (spins up a
+// throwaway probe Pod); that flow is NOT covered here (see run notes for why).
+//
+// The chain under test: kubectl creates Services with different real
+// reachability -> GET /api/trace/{Kind}/{ns}/{name}?probe=true runs radar's
+// local-vantage probe -> the Reachability tab renders the same verdict.
 //
 // All three Services point at ONE tiny pod (busybox httpd), so the fixture
 // stays small: only what differs (the Service's own port wiring / selector)
@@ -65,8 +72,6 @@ spec:
     spec:
       containers:
         - name: web
-          # Google's Docker Hub mirror, not Docker Hub itself - anonymous pulls
-          # from shared CI egress are rate-limited, and this suite runs 12x/day.
           image: mirror.gcr.io/library/busybox:1.36
           command: ["/bin/sh", "-c"]
           args:
@@ -134,19 +139,17 @@ spec:
  *  the Service does with it, and independent of radar entirely. */
 function podServesHTTP(): boolean {
   const podName = kubectl(
-    '-n', NAMESPACE, 'get', 'pods', '-l', `app=${deploymentName}`,
-    '-o', 'jsonpath={.items[0].metadata.name}',
+    '-n', NAMESPACE, 'get', 'pods', '-l', `app=${deploymentName}`, '-o', 'jsonpath={.items[0].metadata.name}',
   );
   const out = kubectl('-n', NAMESPACE, 'exec', podName, '--', 'wget', '-qO-', 'http://localhost:8080/');
   return out.trim() === 'ok';
 }
 
-/** Ground truth for the wrong-port case: proves nothing answers on 9999 in the
- *  SAME network namespace the Service would route into - not a guess. */
+/** Ground truth for the wrong-port case: proves nothing answers on 9999 in
+ *  the SAME network namespace the Service would route into - not a guess. */
 function nothingListensOn9999(): boolean {
   const podName = kubectl(
-    '-n', NAMESPACE, 'get', 'pods', '-l', `app=${deploymentName}`,
-    '-o', 'jsonpath={.items[0].metadata.name}',
+    '-n', NAMESPACE, 'get', 'pods', '-l', `app=${deploymentName}`, '-o', 'jsonpath={.items[0].metadata.name}',
   );
   try {
     kubectl('-n', NAMESPACE, 'exec', podName, '--', 'nc', '-z', '-w', '2', 'localhost', '9999');
@@ -159,9 +162,7 @@ function nothingListensOn9999(): boolean {
 /** Ground truth for the no-endpoints case: the EndpointSlice controller's own
  *  count of ready backends for the Service - not radar's opinion of it. */
 function readyEndpointCount(svc: string): number {
-  const out = kubectl(
-    '-n', NAMESPACE, 'get', 'endpointslice', '-l', `kubernetes.io/service-name=${svc}`, '-o', 'json',
-  );
+  const out = kubectl('-n', NAMESPACE, 'get', 'endpointslice', '-l', `kubernetes.io/service-name=${svc}`, '-o', 'json');
   const slices = JSON.parse(out).items as { endpoints?: { conditions?: { ready?: boolean } }[] }[];
   return slices.flatMap((s) => s.endpoints ?? []).filter((e) => e.conditions?.ready).length;
 }
@@ -188,16 +189,14 @@ interface TraceResponse {
 }
 
 /** Hits the SAME endpoint the Reachability tab calls
- *  (GET /c/{cluster}/api/trace/{kind}/{ns}/{name}?probe=true), proxied by the
- *  hub to radar exactly as a page load would. Polled because the probe is a
- *  live network operation over the hub's tunnel - not because retries paper
- *  over flakiness. */
+ *  (GET /api/trace/{kind}/{ns}/{name}?probe=true). Polled because the probe
+ *  is a live network operation, not because retries paper over flakiness. */
 async function fetchTrace(page: Page, svc: string): Promise<TraceResponse> {
   let last: TraceResponse | undefined;
   await expect
     .poll(
       async () => {
-        const res = await page.request.get(`/c/${clusterId}/api/trace/Service/${NAMESPACE}/${svc}?probe=true`);
+        const res = await page.request.get(`/api/trace/Service/${NAMESPACE}/${svc}?probe=true`);
         if (res.status() !== 200) return `http ${res.status()}`;
         last = (await res.json()) as TraceResponse;
         return last.coverage && last.coverage.tested + last.coverage.failed + last.coverage.passed > 0
@@ -205,7 +204,7 @@ async function fetchTrace(page: Page, svc: string): Promise<TraceResponse> {
           : `not yet probed: ${JSON.stringify(last)}`;
       },
       {
-        message: `radar never returned a probed trace for ${svc} - the hub->radar tunnel or the probe path is broken`,
+        message: `radar never returned a probed trace for ${svc} - the probe path is broken`,
         timeout: 30_000,
         intervals: [500, 1000, 2000, 3000],
       },
@@ -215,26 +214,34 @@ async function fetchTrace(page: Page, svc: string): Promise<TraceResponse> {
 }
 
 test.beforeAll(() => {
-  if (!clusterId) throw new Error('CLUSTER_ID must be set - run through e2e/browser/run.sh');
   deployFixture();
 
   // Every verdict below depends on the cluster's OWN endpoint plumbing being
-  // alive. On an aged or starved kind cluster the controller-manager can
-  // crash-loop out of leader election, at which point the EndpointSlice
-  // controller stops populating and a perfectly healthy Service has no ready
-  // backends - radar then correctly reports it unreachable, and this spec
-  // would read that truthful verdict as the product lying. Fail here, with the
-  // real reason, rather than there.
-  const ready = kubectl(
-    '-n',
-    NAMESPACE,
-    'get',
-    'endpointslices',
-    '-l',
-    `kubernetes.io/service-name=${healthySvc}`,
-    '-o',
-    'jsonpath={.items[*].endpoints[*].conditions.ready}',
-  );
+  // alive. On a resource-starved kind cluster (several kind clusters sharing
+  // one Docker VM's CPU is enough) the controller-manager can crash-loop out
+  // of leader election, at which point the EndpointSlice controller stops
+  // populating and a perfectly healthy Service has no ready backends - radar
+  // then correctly reports it unreachable, and this spec would read that
+  // truthful verdict as the product lying. Fail here, with the real reason,
+  // rather than there. (Observed live while developing this suite: kind
+  // clusters sharing this Docker Desktop VM with several others crash-looped
+  // kube-controller-manager/kube-scheduler on leader-election lease renewal
+  // for ~90s after creation before self-healing - a machine/CI-capacity
+  // condition, not a radar bug.)
+  // `rollout status` above only proves the Pod passed its readiness probe -
+  // the EndpointSlice controller updates asynchronously and can lag it by a
+  // second or two even on a healthy cluster, which a single immediate check
+  // would misreport as the crash-looping-controller case below. Poll briefly
+  // before concluding the cluster itself is unhealthy.
+  let ready = '';
+  const deadline = Date.now() + 15_000;
+  do {
+    ready = kubectl(
+      '-n', NAMESPACE, 'get', 'endpointslices', '-l', `kubernetes.io/service-name=${healthySvc}`,
+      '-o', 'jsonpath={.items[*].endpoints[*].conditions.ready}',
+    );
+    if (ready.includes('true')) break;
+  } while (Date.now() < deadline);
   if (!ready.includes('true')) {
     throw new Error(
       `${NAMESPACE}/${healthySvc} has no ready endpoints, so no reachability verdict here would mean anything. ` +
@@ -249,7 +256,7 @@ test.afterAll(() => {
   kubectl('-n', NAMESPACE, 'delete', 'service', healthySvc, wrongPortSvc, noEndpointsSvc, '--ignore-not-found');
 });
 
-test('radar reports a healthy Service as reachable, backed by a real HTTP 200', async ({ page }, testInfo) => {
+test('radar reports a healthy Service as reached, backed by a real HTTP 200', async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
 
@@ -258,19 +265,21 @@ test('radar reports a healthy Service as reachable, backed by a real HTTP 200', 
   );
 
   const trace = await fetchTrace(page, healthySvc);
-  expect(trace.runVantage, 'radar runs as a Pod in this cluster - the probe must use the in-cluster vantage, not the weaker apiserver-proxy-only local vantage').toBe(
-    'in-cluster',
-  );
-  expect(trace.verdict, `radar called ${healthySvc} "${trace.verdict}" but the pod behind it genuinely answers HTTP 200 - real evidence: ${trace.headline}`).toBe(
-    'healthy',
-  );
-  expect(trace.headline, `headline should read as reachable, got: "${trace.headline}"`).toMatch(/^Reachable\b/);
+  expect(
+    trace.runVantage,
+    'the CLI runs on the laptop driving the test, not as a Pod in the cluster - DetectVantage() must read "local"',
+  ).toBe('local');
+  expect(
+    trace.headline,
+    `expected an apiserver-relayed "reached" headline for ${healthySvc}, got: "${trace.headline}"`,
+  ).toMatch(/^Reached via API server/);
   const route = trace.routes?.[0];
   expect(route?.outcome, `route outcome for ${healthySvc}`).toMatch(/^(reached|verified)$/);
   expect(
     route?.confidence,
-    'a healthy verdict on real evidence must be backed by the REAL data-path dial, not only the apiserver proxy (confidence=indirect would mean the live path was never actually confirmed)',
-  ).toBe('real');
+    'from local vantage every probe is relayed through the kube-apiserver proxy - confidence must read "indirect", never "real" (that would mean the live data path was confirmed, which it was not)',
+  ).toBe('indirect');
+  expect(route?.evidence ?? '', `evidence for ${healthySvc}`).toContain('200');
 
   await testInfo.attach('healthy-service-trace.json', {
     body: JSON.stringify(trace, null, 2),
@@ -278,7 +287,7 @@ test('radar reports a healthy Service as reachable, backed by a real HTTP 200', 
   });
 });
 
-test('radar reports a Service with no listener on its target port as unreachable, not merely "unhealthy"', async ({ page }, testInfo) => {
+test('radar reports a Service with no listener on its target port as unreachable, and names the real cause', async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
 
@@ -288,21 +297,21 @@ test('radar reports a Service with no listener on its target port as unreachable
   ).toBe(true);
 
   const trace = await fetchTrace(page, wrongPortSvc);
-  expect(
-    trace.verdict,
-    `radar called ${wrongPortSvc} "${trace.verdict}" but nothing in the cluster listens on the port it targets (:9999) - real evidence: nc from inside the backend pod itself got connection refused`,
-  ).toBe('broken');
   expect(trace.headline, `headline should read as unreachable, got: "${trace.headline}"`).toMatch(/Unreachable/);
   const route = trace.routes?.[0];
   expect(route?.outcome, `route outcome for ${wrongPortSvc}`).toBe('unreachable');
-  expect(route?.confidence, 'the failure must be backed by the real data-path dial, not just an apiserver-proxy guess').toBe('real');
-  expect(route?.failedLayer, 'the port never accepted a TCP connection at all').toBe('tcp');
+  expect(route?.confidence, 'local-vantage probes are always relayed through the apiserver, never a direct dial').toBe('indirect');
+  // The probe IS the apiserver's HTTP proxy call - there is no raw TCP layer
+  // from this vantage, so the failure is attributed to "http", not "tcp"
+  // (the in-cluster-vantage case would fail at "tcp" instead).
+  expect(route?.failedLayer, 'the failing layer from local vantage is the HTTP proxy call itself').toBe('http');
   expect(route?.evidence ?? '', `evidence for ${wrongPortSvc}`).toMatch(/refused/i);
 
-  // Specific, not just "broken": radar's config check independently names the
-  // exact cause (targetPort points at a port the ready pod never declared) -
-  // this is the "genuinely tricky" case, config LOOKS fine (pod is ready) but
-  // the wiring is wrong, and both the static check and the live probe agree.
+  // Specific, not just "unreachable": radar's config check independently
+  // names the exact cause (targetPort points at a port the ready pod never
+  // declared) - this is the "genuinely tricky" case, config LOOKS fine (pod
+  // is ready) but the wiring is wrong, and both the static check and the
+  // live probe agree.
   const svcHop = trace.downstream?.find((h) => h.resource.kind === 'Service' && h.resource.name === wrongPortSvc);
   expect(
     svcHop?.findings?.some((f) => f.code === 'svc:targetport-no-listener'),
@@ -325,16 +334,12 @@ test('radar reports a Service with zero ready endpoints as unreachable and names
   ).toBe(0);
 
   const trace = await fetchTrace(page, noEndpointsSvc);
-  expect(
-    trace.verdict,
-    `radar called ${noEndpointsSvc} "${trace.verdict}" but its EndpointSlice has zero ready backends - nothing can possibly be serving this Service right now`,
-  ).toBe('broken');
   expect(trace.headline, `headline should read as unreachable, got: "${trace.headline}"`).toMatch(/Unreachable/);
+  expect(trace.routes?.[0]?.outcome, `route outcome for ${noEndpointsSvc}`).toBe('unreachable');
 
-  // Specific, not interchangeable with the wrong-port case above: this Service
-  // is broken for a DIFFERENT reason (selector matches nothing, not a bad
-  // port), and radar's own diagnosis must say so rather than reusing the same
-  // generic "unreachable" explanation for two different root causes.
+  // Specific, not interchangeable with the wrong-port case above: this
+  // Service is broken for a DIFFERENT reason (selector matches nothing, not
+  // a bad port), and radar's own diagnosis must say so.
   expect(
     trace.diagnosis?.summary ?? '',
     `expected radar to name "selector matches no pods" as the cause for ${noEndpointsSvc}, got: ${JSON.stringify(trace.diagnosis)}`,
@@ -348,31 +353,19 @@ test('radar reports a Service with zero ready endpoints as unreachable and names
   });
 });
 
-// KNOWN ISSUE - see KNOWN-ISSUES.md. The Reachability tab is entirely absent
-// from the Hub's shipped frontend bundle right now (radar-hub-web pins
-// @skyhook-io/radar-app to 1.9.4; the feature first shipped in 1.9.6), so this
-// is written as the test SHOULD read once the Hub picks up a current
-// radar-app release, and is expected to fail at the very first UI assertion
-// until then.
-test('the Reachability tab shows the same verdict a user would need to see', async ({ page }, testInfo) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 4: Hub is pinned to @skyhook-io/radar-app 1.9.4, which predates the Reachability tab (shipped in 1.9.6) - see KNOWN-ISSUES.md.',
-  );
-
+test('the Reachability tab shows the same headline a user would see', async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
 
-  await page.goto(`/c/${clusterId}/workload/services/${NAMESPACE}/${healthySvc}?tab=diagnose`);
+  await page.goto(`/workload/services/${NAMESPACE}/${healthySvc}?tab=reachability`);
 
   const reachabilityTab = page.getByRole('tab', { name: /reachability/i });
   await expect(
     reachabilityTab,
     'the Reachability tab never appeared - a user has no way to reach network diagnostics for this resource at all',
   ).toBeVisible({ timeout: 15_000 });
-  await reachabilityTab.click();
 
-  await expect(page.getByText(/^Reachable\b/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/^Reached via API server/)).toBeVisible({ timeout: 15_000 });
 
-  await captureSurface(page, testInfo, 'reachability-tab-missing');
+  await captureSurface(page, testInfo, 'reachability-tab-healthy');
 });

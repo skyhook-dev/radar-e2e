@@ -1,31 +1,16 @@
-import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
+import { test, expect } from '@playwright/test';
+import { assertClusterConnected, captureSurface, kubectl, resourceKindNav, sidebarKindCount } from './helpers';
 
-// Resources browser end-to-end. The chain under test is:
+// Resources browser end-to-end, against the PUBLISHED kubectl-radar binary
+// serving its own UI. The chain under test:
 //
-//   kubectl creates a Deployment -> radar's informer cache picks it up ->
-//   hub pulls it over the tunnel -> hub serves the resource-counts /
-//   resources endpoints -> the Resources page renders kind counts and, on
-//   drill-down, the real workload detail (replicas, pods).
+//   kubectl creates a Deployment -> radar's own informer cache (in the same
+//   process, reading ~/.kube/config directly - no hub, no tunnel) -> the
+//   Resources page renders kind counts and, on drill-down, the real workload
+//   detail (replicas, pods).
 //
-// Everything this spec creates lives in its own `e2e-resources` namespace, so
-// it can't collide with what other specs or other concurrent agents depend
-// on (radar, radar-hub, e2e-demo/timeline-probe).
-//
-// Deliberately NOT covered: the namespace-scope picker ("Switch active
-// namespaces"). Discovered while writing this spec that picking a namespace
-// there - or even just deep-linking to `?namespaces=...` - is not a
-// per-tab UI toggle: RadarApp mirrors whatever namespace filter is active
-// back to a per-user, per-cluster server preference
-// (`/c/{id}/api/cluster/namespace-scope`), and that preference is then the
-// default for every subsequent load by the same account, including other
-// agents' concurrent sessions signed in as the same break-glass admin. Kind
-// counts below are read from the default "All namespaces" view; the
-// drill-down test finds its deployment/pods by their unique name instead of
-// by namespace filter, and the table's own text search (`?search=`, not
-// persisted) is used in place of the drawer's "View Managed Pods" shortcut,
-// which does set `?namespaces=` and would otherwise leak this scope change
-// into every other concurrent session.
+// Everything this spec creates lives in its own `e2e-resources` namespace so
+// it can't collide with the other specs' fixtures on the shared kind cluster.
 
 const NAMESPACE = 'e2e-resources';
 const DEPLOYMENT = 'resources-probe';
@@ -46,9 +31,7 @@ function ensureProbeDeployment() {
     kubectl('get', 'deployment', DEPLOYMENT, '-n', NAMESPACE);
     kubectl('scale', `deployment/${DEPLOYMENT}`, '-n', NAMESPACE, `--replicas=${REPLICAS}`);
   } catch {
-    // pause:3.9 is already cached on the kind node (the harness's own
-    // timeline-probe deployment uses the same image) - avoids a slow or
-    // flaky image pull for a deployment whose content nobody inspects.
+    // pause:3.9 - a minimal, side-effect-free image; nobody inspects its content.
     kubectl(
       'create',
       'deployment',
@@ -67,29 +50,7 @@ function kubectlItemCount(...args: string[]): number {
   return (JSON.parse(out).items as unknown[]).length;
 }
 
-/**
- * Reads a kind's count badge from the Resources sidebar. Label and count are
- * separate text nodes inside the same button, so the accessible name comes
- * out as "<Kind> <count>" once loaded (or "<Kind> –" while a count is
- * still unavailable, which parses to NaN and lets the caller's poll keep
- * waiting instead of matching a false zero).
- */
-function sidebarKindButton(page: Page, kind: string) {
-  // Scoped to the sidebar <nav>: an open workload drawer can add its own
-  // same-named buttons elsewhere on the page (e.g. a "Pod Template" section
-  // header), which would otherwise make the kind button ambiguous.
-  return page.locator('nav').getByRole('button', { name: new RegExp(`^${kind}\\b`) }).first();
-}
-
-async function sidebarKindCount(page: Page, kind: string): Promise<number> {
-  const button = sidebarKindButton(page, kind);
-  await expect(button).toBeVisible();
-  const parts = (await button.innerText()).trim().split(/\s+/).filter(Boolean);
-  return Number(parts[parts.length - 1]);
-}
-
 test.beforeAll(() => {
-  if (!clusterId) throw new Error('CLUSTER_ID must be set - run through e2e/browser/run.sh');
   ensureProbeDeployment();
 });
 
@@ -99,22 +60,21 @@ test('kind counts on the Resources page match the cluster', async ({ page }, tes
 
   // Truth from kubectl, read right before the UI is asked to agree with it.
   // Deployment/Pod are namespaced (exercise the per-kind counts endpoint
-  // across every namespace); Namespace is cluster-scoped (a completely
-  // separate discovery path - not the per-namespace informer).
+  // across every namespace); Namespace is cluster-scoped - a completely
+  // separate discovery path, not the per-namespace informer.
   const kinds: Record<string, () => number> = {
     Deployment: () => kubectlItemCount('deployments', '-A'),
     Pod: () => kubectlItemCount('pods', '-A'),
     Namespace: () => kubectlItemCount('namespaces'),
   };
 
-  await page.goto(`/c/${clusterId}/resources`);
+  await page.goto('/resources');
 
   for (const [kind, countInCluster] of Object.entries(kinds)) {
     // Re-read the cluster on every poll rather than snapshotting it once up
-    // front. A count taken before the page loads is stale the moment anything
-    // else in the cluster changes - another scenario's pod terminating, a
-    // rollout finishing - and a stale target can never be matched, so the test
-    // would fail for a reason that has nothing to do with the Resources page.
+    // front - a count taken before the page loads is stale the moment
+    // anything else in the cluster changes (another spec's fixture rolling
+    // out), and a stale target can never be matched.
     await expect
       .poll(
         async () => {
@@ -148,8 +108,8 @@ test('drilling into the deployment shows its real replicas and pods', async ({ p
     desired,
   );
 
-  await page.goto(`/c/${clusterId}/resources`);
-  await sidebarKindButton(page, 'Deployment').click();
+  await page.goto('/resources');
+  await resourceKindNav(page).getByRole('button', { name: /^Deployment\b/ }).click();
 
   const table = page.getByRole('table').first();
   const row = table.getByRole('row').filter({ hasText: DEPLOYMENT });
@@ -167,13 +127,11 @@ test('drilling into the deployment shows its real replicas and pods', async ({ p
   const replicasValue = page.getByText('Replicas', { exact: true }).locator('xpath=following-sibling::span[1]');
   await expect(
     replicasValue,
-    `workload drawer shows a different replica count than kubectl (kubectl: ${ready}/${desired})`,
+    `workload detail shows a different replica count than kubectl (kubectl: ${ready}/${desired})`,
   ).toHaveText(`${ready}/${desired}`);
 
-  // Switch to the Pod kind and narrow by name via the table's own search
-  // instead of the drawer's "View Managed Pods" shortcut - see the note atop
-  // this file on why that shortcut's owner+namespace URL filter is avoided.
-  await sidebarKindButton(page, 'Pod').click();
+  // Switch to the Pod kind and narrow by name via the table's own search.
+  await resourceKindNav(page).getByRole('button', { name: /^Pod\b/ }).click();
   await page.getByPlaceholder('Search... (press /)').fill(DEPLOYMENT);
 
   const podTable = page.getByRole('table').first();
@@ -186,5 +144,5 @@ test('drilling into the deployment shows its real replicas and pods', async ({ p
   // Header row + exactly the pods kubectl reports - not more, not fewer.
   await expect(podTable.getByRole('row')).toHaveCount(podNames.length + 1);
 
-  await captureSurface(page, testInfo, 'workload-drawer-replicas');
+  await captureSurface(page, testInfo, 'workload-detail-replicas');
 });

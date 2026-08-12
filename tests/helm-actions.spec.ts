@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { assertClusterConnected, clusterId, helm, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, helm, kubectl, captureSurface } from './helpers';
 
 // Helm WRITE path: upgrade and rollback. helm.spec.ts covers reads only -
 // release data pulled out of the cluster and displayed. Writes are a
@@ -243,10 +243,7 @@ test('upgrading a release from the Values editor changes the cluster and advance
   const history = releaseHistory();
   expect(history.length, `helm history for "${RELEASE}" is still 1 entry - no new revision was created`).toBeGreaterThan(1);
 
-  await testInfo.attach('upgrade-result.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'helm-upgrade-refused');
 });
 
 test('rolling back a release from History reverts the cluster to the previous revision', async ({ page }, testInfo) => {
@@ -316,8 +313,5 @@ test('rolling back a release from History reverts the cluster to the previous re
   const after = releaseHistory();
   expect(after[after.length - 1].status, 'the newest revision after rollback is not "deployed"').toBe('deployed');
 
-  await testInfo.attach('rollback-result.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'helm-rollback-refused');
 });

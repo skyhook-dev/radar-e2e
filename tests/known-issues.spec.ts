@@ -1,5 +1,5 @@
 import { test, expect, request as playwrightRequest } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, captureSurface, clusterId, kubectl } from './helpers';
 
 // Confirmed product defects, pinned so they cannot be forgotten.
 //
@@ -45,7 +45,7 @@ test.afterAll(async () => {
   kubectl('-n', NAMESPACE, 'delete', 'deployment', WORKLOAD, '--ignore-not-found', '--wait=false');
 });
 
-test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page }) => {
+test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page }, testInfo) => {
   test.fail(
     true,
     'KNOWN ISSUE 1: the hub fleet fan-out sends no namespace and no globalNs, so fleet reads inherit the per-user namespace-switcher pick. See KNOWN-ISSUES.md.',
@@ -82,6 +82,13 @@ test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page })
   const res = await page.request.get('/api/fleet/issues');
   expect(res.status(), 'fleet issues endpoint').toBe(200);
   const issues = (await res.json()).issues ?? [];
+
+  // The picture IS the defect: a fleet-wide Issues page showing all-clear while
+  // a critical image-pull failure is live in another namespace. Worth capturing
+  // on every run - it is the most persuasive artifact this suite produces, and
+  // the day it stops looking like this is the day the bug is fixed.
+  await page.goto('/issues');
+  await captureSurface(page, testInfo, 'fleet-issues-hidden-by-namespace-pick');
 
   // Restore before asserting, so a failure here cannot leave the shared
   // account scoped and break every later scenario.

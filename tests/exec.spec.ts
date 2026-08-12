@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // Pod exec is the suite's third transport. Plain request/response is covered
 // by most specs, server-sent events by logs.spec.ts, and this is the last
@@ -173,10 +173,7 @@ test('typed input reaches the pod and its real output renders in the terminal', 
     `"${marker} host=${podName}" never appeared in the terminal - either input never reached the pod's shell, or its output never made it back`,
   ).toBeVisible({ timeout: 20_000 });
 
-  await testInfo.attach('exec-command-output.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'terminal-command-echoed');
 });
 
 test('the terminal reports a clean disconnect when the remote shell exits', async ({ page }, testInfo) => {
@@ -215,8 +212,5 @@ test('the terminal reports a clean disconnect when the remote shell exits', asyn
   // panel for a red "Failed to connect" screen with a Retry button).
   await expect(page.getByText(/failed to connect/i)).toHaveCount(0);
 
-  await testInfo.attach('exec-clean-exit.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'terminal-clean-disconnect');
 });

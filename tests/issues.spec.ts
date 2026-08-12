@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // Problem detection + search end-to-end. The chain under test is:
 //
@@ -180,10 +180,7 @@ test('a broken workload is detected and surfaces on the fleet Issues page, attri
     })
     .toBeGreaterThan(0);
 
-  await testInfo.attach('issues-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'issues-broken-workload-detected');
 });
 
 test('cross-cluster search finds the workload by name', async ({ page }, testInfo) => {
@@ -221,8 +218,5 @@ test('cross-cluster search finds the workload by name', async ({ page }, testInf
   await expect(row.first(), `no search result row for ${WORKLOAD_NAME}`).toBeVisible();
   await expect(row.first(), `search result for ${WORKLOAD_NAME} is not attributed to namespace ${NAMESPACE}`).toContainText(NAMESPACE);
 
-  await testInfo.attach('search-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'search-finds-workload');
 });

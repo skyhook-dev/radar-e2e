@@ -1,5 +1,5 @@
 import { test, expect, request as playwrightRequest, type Page } from '@playwright/test';
-import { adminEmail } from './helpers';
+import { adminEmail, captureSurface } from './helpers';
 
 // Hub administration surfaces NOT already covered by settings.spec.ts
 // (members, audit log, PATs, self-hosted license): invitations, personal
@@ -83,10 +83,7 @@ test(
       'the members page never confirmed the invite it just created',
     ).toBeVisible();
 
-    await testInfo.attach('invite-created.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'invite-created-with-link');
 
     try {
       // ---- unauthenticated preview: real "no session" context, not the
@@ -222,10 +219,7 @@ test(
         `theme reverted (or never persisted) after a fresh page load - expected "${label(nextMode)}"`,
       ).toContainText(label(nextMode));
 
-      await testInfo.attach('preferences-after-reload.png', {
-        body: await page.screenshot({ fullPage: true }),
-        contentType: 'image/png',
-      });
+      await captureSurface(page, testInfo, 'preferences-persisted');
     } finally {
       const restoreRes = await page.request.patch('/api/preferences', {
         data: { theme: originalTheme },
@@ -264,10 +258,7 @@ test('the notification inbox shows real fleet activity, and marking one notifica
   const tray = page.locator('[data-notif-tray]');
   await expect(tray, 'notification tray never opened').toBeVisible();
 
-  await testInfo.attach('notification-tray.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'inbox-marked-read');
 
   if (inbox.notifications.length === 0) {
     // Honest empty state: this environment has produced no org events yet.

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // ============================================================================
 // GitOps coverage.
@@ -494,9 +494,6 @@ test.describe('GitOps', () => {
     await expect(row, `row does not show Argo's real sync status "${realSync}"`).toContainText(realSync!);
     await expect(row, `row does not show Argo's real health status "${realHealth}"`).toContainText(realHealth!);
 
-    await testInfo.attach('gitops-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'gitops-application-synced');
   });
 });

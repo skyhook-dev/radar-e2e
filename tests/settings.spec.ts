@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { adminEmail } from './helpers';
+import { adminEmail, captureSurface } from './helpers';
 
 // Hub administration surface: Members, Audit log, Personal access tokens,
 // and self-hosted license status. Unlike timeline.spec.ts / helm.spec.ts
@@ -56,10 +56,7 @@ test('the bootstrap admin appears as a member with the owner role', async ({ pag
     `Members page shows a row for ${adminEmail} but it doesn't say "owner"`,
   ).toContainText('owner');
 
-  await testInfo.attach('members-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'members-owner-role');
 });
 
 test(
@@ -175,10 +172,7 @@ test(
       body: JSON.stringify(causedByThisRun, null, 2),
       contentType: 'application/json',
     });
-    await testInfo.attach('audit-view.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'audit-pat-lifecycle');
   },
 );
 
@@ -250,8 +244,5 @@ test('the self-hosting page reflects the license this deployment actually runs o
     ).toContainText(formatted);
   }
 
-  await testInfo.attach('self-hosting-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'self-hosting-license');
 });

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // Clusters list + the cluster-scoped views that are radar's own UI embedded
 // by the hub and proxied over the tunnel: Topology, Traffic, Capacity, Cost.
@@ -156,10 +156,7 @@ test.describe('Clusters page', () => {
       `version pill should show the radar_version (${cluster.radar_version}) the API reports`,
     ).toContainText(cluster.radar_version);
 
-    await testInfo.attach('clusters-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'clusters-list-connected');
   });
 });
 
@@ -206,10 +203,7 @@ test.describe('cluster-scoped views (radar embedded via the tunnel)', () => {
       pluralPhrase(radarHub.statefulsets, 'StatefulSet'),
     );
 
-    await testInfo.attach('topology-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'topology-loaded');
     await testInfo.attach('topology-console-errors.json', {
       body: JSON.stringify(errors, null, 2),
       contentType: 'application/json',
@@ -255,10 +249,7 @@ test.describe('cluster-scoped views (radar embedded via the tunnel)', () => {
       `Memory scheduling bar should read "${memText}" (from radar's own /api/capacity)`,
     ).toContainText(memText);
 
-    await testInfo.attach('capacity-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'capacity-node-inventory');
     await testInfo.attach('capacity-console-errors.json', {
       body: JSON.stringify(errors, null, 2),
       contentType: 'application/json',
@@ -300,10 +291,7 @@ test.describe('cluster-scoped views (radar embedded via the tunnel)', () => {
       ).toBeVisible();
     }
 
-    await testInfo.attach('traffic-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'traffic-no-capture-tool');
     await testInfo.attach('traffic-console-errors.json', {
       body: JSON.stringify(errors, null, 2),
       contentType: 'application/json',
@@ -346,10 +334,7 @@ test.describe('cluster-scoped views (radar embedded via the tunnel)', () => {
       )
       .toBe(true);
 
-    await testInfo.attach('cost-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'cost-no-prometheus');
     await testInfo.attach('cost-console-errors.json', {
       body: JSON.stringify(errors, null, 2),
       contentType: 'application/json',

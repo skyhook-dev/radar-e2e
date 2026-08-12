@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { assertClusterConnected, clusterId, demoDeployment, demoNamespace, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, demoDeployment, demoNamespace, kubectl, captureSurface } from './helpers';
 
 // Two fleet surfaces, two different radar endpoints, so the "real data"
 // question has a different answer for each:
@@ -226,10 +226,7 @@ test.describe('Certs', () => {
     await unhealthyTile.click();
     await expect(row, 'the row must still show once filtered to the Expired/soon (unhealthy) bucket').toBeVisible();
 
-    await testInfo.attach('certs-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'certs-list-expiring-soon');
   });
 });
 
@@ -338,10 +335,7 @@ test.describe('Checks', () => {
       `"${check!.title}" card never listed ${findingText} among its affected resources`,
     ).toBeVisible();
 
-    await testInfo.attach('checks-queue.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'checks-queue-actionable-finding');
   });
 
   test('the Upgrade impact view surfaces real evidence from this cluster', async ({ page }, testInfo) => {
@@ -412,9 +406,6 @@ test.describe('Checks', () => {
       ).toBeVisible();
     }
 
-    await testInfo.attach('upgrade-impact.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'upgrade-impact-blocker');
   });
 });

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // Alerting end-to-end. The chain under test is:
 //
@@ -168,10 +168,7 @@ test('an alert rule can be created through the UI, appears in the rules list, an
       `"${ruleName}" did not survive a page load`,
     ).toBeVisible();
 
-    await testInfo.attach('rules-list-after-reload.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'alert-rules-list-persisted');
   } finally {
     if (ruleId) await deleteRule(page, orgId, ruleId);
   }
@@ -293,10 +290,7 @@ test('a rule matching a real, live ErrImagePull condition actually fires and app
       body: JSON.stringify(instance, null, 2),
       contentType: 'application/json',
     });
-    await testInfo.attach('alerts-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'alerts-list-fired');
   } finally {
     kubectl('-n', NAMESPACE, 'delete', 'deployment', decoy, '--ignore-not-found', '--wait=false');
     kubectl('-n', NAMESPACE, 'delete', 'deployment', workload, '--ignore-not-found', '--wait=false');
@@ -363,10 +357,9 @@ test('the rules list and its edit dialog render exactly the rule configuration s
       'edit dialog shows "Notify when issues resolve" checked, but the rule was created with notify_on_resolve=false',
     ).not.toBeChecked();
 
-    await testInfo.attach('rule-edit-dialog.png', {
-      body: await dialog.screenshot(),
-      contentType: 'image/png',
-    });
+    // Element shot, not the page: a dialog photographed with all the chrome
+    // around it buries the thing under review in noise.
+    await captureSurface(page, testInfo, 'alert-rule-dialog-hydrated', dialog);
 
     // Close without saving - Escape is safe here (not mid-mutation).
     await page.keyboard.press('Escape');

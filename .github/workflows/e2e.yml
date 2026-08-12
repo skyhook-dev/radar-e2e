@@ -285,6 +285,7 @@ jobs:
           RADAR_DIR: ${{ github.workspace }}/.e2e-repos/radar
           CHARTS_DIR: ${{ github.workspace }}/.e2e-repos/helm-charts
           CLUSTER: e2e-${{ matrix.scenario }}
+          SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
         run: ./run.sh all
 
@@ -303,6 +304,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            visual/
             diagnostics.txt
           retention-days: 7
 
@@ -410,6 +412,7 @@ jobs:
           RADAR_DIR: ${{ github.workspace }}/.e2e-repos/radar
           CHARTS_DIR: ${{ github.workspace }}/.e2e-repos/helm-charts
           CLUSTER: pub-${{ matrix.scenario }}
+          SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
         run: ./run.sh all
 
@@ -428,6 +431,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            visual/
             diagnostics.txt
           retention-days: 7
 
@@ -488,3 +492,38 @@ jobs:
           else:
               print('No scenario passes on the release while failing on main.')
           PY
+
+  # One zip a human can open. Every scenario job uploads its own artifact for
+  # drilling in; this collects them all and builds a single self-contained page
+  # pairing each surface's main shot against the published one. if: always()
+  # because the screenshots matter most when something failed.
+  gallery:
+    needs: [e2e-main, e2e-published]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout this harness
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      # One step pulls every scenario artifact from both variants.
+      - name: Download all scenario artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: playwright-*
+          path: artifacts
+
+      - name: Build the visual review
+        run: |
+          node scripts/build-gallery.mjs artifacts gallery \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Upload the visual review
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-review
+          path: gallery/
+          retention-days: 14

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { assertClusterConnected, clusterId, installedHelmReleases } from './helpers';
+import { assertClusterConnected, clusterId, installedHelmReleases, captureSurface } from './helpers';
 
 // Second sanity scenario, deliberately on a different code path from the
 // timeline: Helm release data is read out of the cluster by radar (release
@@ -40,10 +40,7 @@ test('the Helm page lists the releases installed in the cluster', async ({ page 
     ).toContainText(release.chart);
   }
 
-  await testInfo.attach('helm-page.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'helm-releases-list');
 });
 
 test('a release reports the status Helm reports', async ({ page }) => {

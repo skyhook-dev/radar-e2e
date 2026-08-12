@@ -16,7 +16,12 @@ export default defineConfig({
   use: {
     baseURL: process.env.HUB_URL ?? 'http://localhost:18080',
     trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    // Capture a screenshot at the end of EVERY test, not just failures: the
+    // suite doubles as a visual record of what the product looked like on this
+    // commit, and the gallery job pairs each shot with the same test from the
+    // published release. Specs that attach their own mid-test screenshots
+    // still do - both end up in the report.
+    screenshot: 'on',
     video: 'retain-on-failure',
   },
   // One sign-in for the whole suite. The hub allows 5 break-glass logins per

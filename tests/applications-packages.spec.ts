@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { assertClusterConnected, clusterId, kubectl, installedHelmReleases } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, installedHelmReleases, captureSurface } from './helpers';
 
 // Applications + Packages: the two fleet-wide (cross-cluster) pivots.
 //
@@ -251,10 +251,7 @@ test.describe('Applications', () => {
     // Workloads column summarizes kind counts.
     await expect(uiRow.first(), 'row does not summarize its one Deployment workload').toContainText('Deployment');
 
-    await testInfo.attach('applications-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'applications-list-with-labelled-app');
   });
 });
 
@@ -386,9 +383,6 @@ test.describe('Packages', () => {
     await expect(page.getByText('Detection coverage', { exact: true }), 'Detection coverage footer missing').toBeVisible();
     await expect(page.getByText(/via Helm/), 'Detection coverage footer should show Helm as a working detection source for this cluster').toBeVisible();
 
-    await testInfo.attach('packages-page.png', {
-      body: await page.screenshot({ fullPage: true }),
-      contentType: 'image/png',
-    });
+    await captureSurface(page, testInfo, 'packages-pivot-by-chart');
   });
 });

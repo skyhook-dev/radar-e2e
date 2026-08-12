@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl } from './helpers';
+import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
 
 // Write-path end-to-end. Every other spec in this suite only reads what
 // radar already pulled from the cluster. This one causes a change FROM the
@@ -177,10 +177,7 @@ test('scaling a deployment from the UI changes the cluster and the UI reflects i
     })
     .toBe(`${SCALED_REPLICAS}/${SCALED_REPLICAS}`);
 
-  await testInfo.attach('scale-result.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'workload-scaled');
 });
 
 test('restarting a workload from the UI replaces its pods', async ({ page }, testInfo) => {
@@ -244,10 +241,7 @@ test('restarting a workload from the UI replaces its pods', async ({ page }, tes
     body: JSON.stringify({ before, after, restartedAt }, null, 2),
     contentType: 'application/json',
   });
-  await testInfo.attach('restart-result.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'workload-restarted');
 });
 
 test('deleting a pod from the UI removes it and the deployment replaces it', async ({ page }, testInfo) => {
@@ -304,8 +298,5 @@ test('deleting a pod from the UI removes it and the deployment replaces it', asy
     )
     .toBe(true);
 
-  await testInfo.attach('delete-pod-result.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'pod-deleted-replaced');
 });

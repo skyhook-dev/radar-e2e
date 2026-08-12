@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect, request as playwrightRequest, type Page } from '@playwright/test';
-import { authStatePath, clusterId, kubectl } from './helpers';
+import { authStatePath, clusterId, kubectl, captureSurface } from './helpers';
 
 // Fleet aggregation with more than one cluster connected.
 //
@@ -20,6 +20,11 @@ const SECOND_RELEASE = 'radar2';
 const SECOND_NS = 'radar2';
 const HUB_NS = process.env.NS ?? 'radar-hub';
 const RADAR_DIR = process.env.RADAR_DIR ?? '../radar';
+// Honour the harness's variant. In published mode there is no locally built
+// radar image and no source chart to install from - the point of that variant
+// is to run exactly what customers get - so the second agent has to come from
+// the released chart with its own image tag, like the first one did.
+const PUBLISHED = process.env.VARIANT === 'published';
 
 let secondClusterId = '';
 
@@ -87,18 +92,19 @@ test('a second cluster connects and the fleet aggregates across both', async ({ 
 
   // Same wss + insecureSkipVerify path the harness uses for the first agent:
   // radar refuses a plain ws:// tunnel to a non-loopback host.
+  if (PUBLISHED) {
+    // run.sh has already added/updated the skyhook repo for this variant.
+    helmCli('repo', 'update', 'skyhook');
+  }
   helmCli(
     'upgrade',
     '--install',
     SECOND_RELEASE,
-    `${RADAR_DIR}/deploy/helm/radar`,
+    PUBLISHED ? 'skyhook/radar' : `${RADAR_DIR}/deploy/helm/radar`,
     '--namespace',
     SECOND_NS,
     '--create-namespace',
-    '--set',
-    'image.repository=radar',
-    '--set',
-    'image.tag=e2e',
+    ...(PUBLISHED ? [] : ['--set', 'image.repository=radar', '--set', 'image.tag=e2e']),
     '--set',
     'cloud.enabled=true',
     '--set',
@@ -168,8 +174,5 @@ test('a second cluster connects and the fleet aggregates across both', async ({ 
     )
     .toBe('both clusters contribute');
 
-  await testInfo.attach('clusters-page-two-connected.png', {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png',
-  });
+  await captureSurface(page, testInfo, 'clusters-list-two-connected');
 });

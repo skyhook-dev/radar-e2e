@@ -3,33 +3,23 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, clusterId, kubectl, captureSurface } from './helpers';
+import { assertClusterConnected, captureSurface, kubectl } from './helpers';
 
-// Pod logs are the suite's first STREAMING scenario. Everything else here is
-// plain request/response; a pod's stdout travels over a long-lived SSE
-// connection multiplexed through the hub's yamux tunnel to the in-cluster
-// radar (see useLogStream.ts / handleWorkloadLogsStream). That path breaks
-// independently of resources/timeline/helm - a tunnel that serves ordinary
-// GETs just fine can still fail to keep a stream open - so it needs its own
-// coverage rather than riding along on another spec.
+// Pod logs is the suite's one STREAMING scenario. Everything else here is
+// plain request/response; a pod's stdout travels over Server-Sent Events
+// straight from radar's own process (no tunnel to go stale, unlike the hub
+// variant of this spec) to the browser. Still worth its own coverage: SSE
+// framing, keep-alives and the follow behavior are a genuinely different code
+// path from the rest of the app.
 //
-// The chain under test:
-//   busybox loop writes to its own stdout -> kubelet captures it -> radar's
-//   workload-logs stream handler tails+follows it -> the hub proxies that SSE
-//   stream through the tunnel -> the embedded RadarApp's WorkloadLogsViewer
-//   renders it in the Logs tab.
+// The chain under test: busybox loop writes to its own stdout -> kubelet
+// captures it -> radar's workload-logs stream handler tails+follows it -> the
+// Logs tab renders it.
 
-const logsNamespace = 'e2e-logs';
-
-/**
- * A per-run marker + monotonic counter, so the assertions below can only be
- * satisfied by THIS run's pod, live, right now - never by a stale render, a
- * leftover pod from an earlier run, or someone else's workload in the
- * cluster (other agents share this cluster).
- */
+const NAMESPACE = 'e2e-logs';
 const runId = randomBytes(4).toString('hex');
 const marker = `e2e-logs-${runId}`;
-const deploymentName = `log-emitter-${runId}`;
+const DEPLOYMENT = `log-emitter-${runId}`;
 
 /** Deploy a workload whose entire purpose is emitting lines we can uniquely
  * identify and independently re-read via `kubectl logs` as ground truth. */
@@ -38,31 +28,29 @@ function deployLogEmitter() {
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ${logsNamespace}
+  name: ${NAMESPACE}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ${deploymentName}
-  namespace: ${logsNamespace}
+  name: ${DEPLOYMENT}
+  namespace: ${NAMESPACE}
   labels:
-    app: ${deploymentName}
+    app: ${DEPLOYMENT}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ${deploymentName}
+      app: ${DEPLOYMENT}
   template:
     metadata:
       labels:
-        app: ${deploymentName}
+        app: ${DEPLOYMENT}
     spec:
       containers:
         - name: emitter
-          # Pulled from Google's Docker Hub mirror rather than Docker Hub
-          # itself: anonymous pulls from shared CI egress addresses are
-          # rate-limited, and at this suite's cadence that failure would
-          # surface as "log streaming is broken" rather than as a pull error.
+          # Google's Docker Hub mirror, not Docker Hub itself - anonymous
+          # pulls from shared CI egress addresses are rate-limited.
           image: mirror.gcr.io/library/busybox:1.36
           command: ["/bin/sh", "-c"]
           args:
@@ -83,38 +71,22 @@ spec:
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  kubectl(
-    '-n',
-    logsNamespace,
-    'rollout',
-    'status',
-    `deployment/${deploymentName}`,
-    '--timeout=60s',
-  );
+  kubectl('-n', NAMESPACE, 'rollout', 'status', `deployment/${DEPLOYMENT}`, '--timeout=60s');
 }
 
 /** The pod's own stdout, read straight from the cluster - the ground truth
  * the UI assertions are checked against, never a fixture. */
 function readPodLogsFromCluster(): string {
   const podName = kubectl(
-    '-n',
-    logsNamespace,
-    'get',
-    'pods',
-    '-l',
-    `app=${deploymentName}`,
-    '-o',
-    'jsonpath={.items[0].metadata.name}',
+    '-n', NAMESPACE, 'get', 'pods', '-l', `app=${DEPLOYMENT}`, '-o', 'jsonpath={.items[0].metadata.name}',
   );
-  return kubectl('-n', logsNamespace, 'logs', podName, '--tail=500');
+  return kubectl('-n', NAMESPACE, 'logs', podName, '--tail=500');
 }
 
 /** Highest `counter=N` for our marker currently visible in the kubectl truth. */
 function maxCounterInClusterLogs(): number {
   const text = readPodLogsFromCluster();
-  const counters = [...text.matchAll(new RegExp(`${marker} counter=(\\d+)`, 'g'))].map((m) =>
-    Number(m[1]),
-  );
+  const counters = [...text.matchAll(new RegExp(`${marker} counter=(\\d+)`, 'g'))].map((m) => Number(m[1]));
   return counters.length > 0 ? Math.max(...counters) : -1;
 }
 
@@ -132,36 +104,26 @@ async function openLogsTab(page: Page) {
   await page.goto('/');
   await assertClusterConnected(page);
 
-  // Deployment kinds go through WORKLOAD_LOG_KINDS -> the aggregated
-  // WorkloadLogsViewer, which auto-streams on mount (autoStream=true) rather
-  // than showing a static snapshot first - so landing on ?tab=logs already
-  // exercises the SSE path, not a separate "click Stream" step.
-  await page.goto(`/c/${clusterId}/workload/deployments/${logsNamespace}/${deploymentName}?tab=logs`);
-
-  // The stream needs the resource + pod list to resolve before the Logs tab
-  // even renders (WorkloadView falls back to Overview while pods are still
-  // loading) - wait for the tab content itself rather than a fixed sleep.
+  // Landing straight on ?tab=logs already exercises the SSE path - the
+  // Logs tab auto-streams on mount, not a separate "click Stream" step.
+  await page.goto(`/workload/deployments/${NAMESPACE}/${DEPLOYMENT}?tab=logs`);
   await expect(page.getByRole('button', { name: /stop/i })).toBeVisible({ timeout: 30_000 });
 }
 
 test.beforeAll(() => {
-  if (!clusterId) throw new Error('CLUSTER_ID must be set - run through e2e/browser/run.sh');
   deployLogEmitter();
 });
 
 test.afterAll(() => {
-  kubectl('-n', logsNamespace, 'delete', 'deployment', deploymentName, '--ignore-not-found', '--wait=false');
+  kubectl('-n', NAMESPACE, 'delete', 'deployment', DEPLOYMENT, '--ignore-not-found', '--wait=false');
 });
 
-test('the Logs tab shows this pod\'s own log lines, verified against kubectl', async ({ page }, testInfo) => {
+test("the Logs tab shows this pod's own log lines, verified against kubectl", async ({ page }, testInfo) => {
   await openLogsTab(page);
 
-  // Wait for at least one of our marker lines to reach the UI, then check it
-  // against what the pod itself reports - not just "some text containing the
-  // marker appeared", but a specific counter value kubectl also has.
   await expect
     .poll(() => maxCounterInPage(page), {
-      message: `no "${marker}" log lines ever reached the Logs tab - the radar -> tunnel -> hub log stream is broken`,
+      message: `no "${marker}" log lines ever reached the Logs tab - radar's log stream handler is broken`,
       timeout: 30_000,
       intervals: [1000, 2000, 3000],
     })
@@ -202,14 +164,8 @@ test('new log lines appear live while the page stays open, with no reload', asyn
     })
     .toBeGreaterThan(initialMax);
 
-  // The stream must still be the thing driving this - if the toggle silently
-  // flipped to "Stream" (stopped) partway through, a slow poll interval could
-  // still observe a higher counter from a lucky manual refresh and hide that
-  // the persistent connection actually died.
   await expect(page.getByRole('button', { name: /stop/i })).toBeVisible();
 
-  // And the count must keep climbing on a second pass - not have topped out
-  // (e.g. a stream that delivers one late burst and then silently stalls).
   const secondMax = await maxCounterInPage(page);
   await expect
     .poll(() => maxCounterInPage(page), {

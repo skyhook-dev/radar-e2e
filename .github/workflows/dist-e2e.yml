@@ -1,0 +1,1316 @@
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - name: Resolve the version under test
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="$(gh release view --repo skyhook-io/radar --json tagName --jq '.tagName' | sed 's/^v//')"
+          fi
+          [ -n "$version" ] || { echo "::error::could not resolve a release version to test"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version"   >> "$GITHUB_OUTPUT"
+          echo "Testing published version $version" >> "$GITHUB_STEP_SUMMARY"
+    homebrew-linux:
+      name: Homebrew (Linux)
+      needs: resolve-version
+      runs-on: ubuntu-latest
+      timeout-minutes: 15
+      steps:
+      - name: Install Homebrew
+        run: 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+          echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+
+          echo "/home/linuxbrew/.linuxbrew/sbin" >> "$GITHUB_PATH"
+
+          '
+      - name: brew tap skyhook-io/tap && brew install radar
+        run: 'brew tap skyhook-io/tap
+
+          brew trust --tap skyhook-io/tap
+
+          brew install skyhook-io/tap/radar
+
+          '
+      - name: Assert installed version matches the latest published release
+        run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nKUBECTL_RADAR_VERSION=$(kubectl-radar\
+          \ --version | awk '{print $2}')\nRADAR_SYMLINK_VERSION=$(radar --version | awk '{print $2}')\n\
+          echo \"expected=$EXPECTED kubectl-radar=$KUBECTL_RADAR_VERSION radar(symlink)=$RADAR_SYMLINK_VERSION\"\
+          \n\nFAIL=0\n[ \"$KUBECTL_RADAR_VERSION\" = \"$EXPECTED\" ] || FAIL=1\n[ \"$RADAR_SYMLINK_VERSION\"\
+          \ = \"$EXPECTED\" ] || FAIL=1\n\nif [ \"$FAIL\" = \"1\" ]; then\n  # Neutral on purpose: this\
+          \ guard exists to catch tap/release drift\n  # whenever it happens, not to assert a specific known\
+          \ cause.\n  echo \"::error::Homebrew-installed radar (kubectl-radar=$KUBECTL_RADAR_VERSION, radar=$RADAR_SYMLINK_VERSION)\
+          \ does not match the latest published release ($EXPECTED). Check skyhook-io/homebrew-tap Formula/radar.rb\
+          \ against github.com/skyhook-io/radar/releases/latest, and confirm radar's release.yml (GoReleaser\
+          \ 'brews:' stanza) ran and pushed successfully for that release.\"\n  exit 1\nfi\necho \"OK: Homebrew\
+          \ formula matches the latest release ($EXPECTED).\"\n"
+    install-script-linux:
+      name: install.sh (Linux)
+      needs: resolve-version
+      runs-on: ubuntu-latest
+      timeout-minutes: 10
+      steps:
+      - name: Run the published curl-pipe installer
+        run: curl -fsSL https://get.radarhq.io | sh
+      - name: Assert installed version, location, and shorthand symlink
+        run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\n\nif [ ! -x /usr/local/bin/kubectl-radar\
+          \ ]; then\n  echo \"::error::install.sh did not place kubectl-radar at /usr/local/bin/kubectl-radar.\"\
+          \n  exit 1\nfi\nKUBECTL_RADAR_VERSION=$(/usr/local/bin/kubectl-radar --version | awk '{print $2}')\n\
+          if [ \"$KUBECTL_RADAR_VERSION\" != \"$EXPECTED\" ]; then\n  echo \"::error::install.sh installed\
+          \ kubectl-radar v$KUBECTL_RADAR_VERSION but the latest published release is v$EXPECTED. install.sh\
+          \ resolves the version via the github.com/skyhook-io/radar/releases/latest redirect \u2014 check\
+          \ that redirect and the release asset naming (radar_v<version>_linux_<arch>.tar.gz).\"\n  exit\
+          \ 1\nfi\n\nSYMLINK_TARGET=$(readlink /usr/local/bin/radar || true)\nif [ \"$SYMLINK_TARGET\" !=\
+          \ \"kubectl-radar\" ]; then\n  echo \"::error::Expected /usr/local/bin/radar -> kubectl-radar\
+          \ symlink, got '$SYMLINK_TARGET'.\"\n  exit 1\nfi\nRADAR_SHORTHAND_VERSION=$(/usr/local/bin/radar\
+          \ --version | awk '{print $2}')\nif [ \"$RADAR_SHORTHAND_VERSION\" != \"$EXPECTED\" ]; then\n\
+          \  echo \"::error::'radar' shorthand reports v$RADAR_SHORTHAND_VERSION, expected v$EXPECTED.\"\
+          \n  exit 1\nfi\n"
+      - name: "Idempotency \u2014 rerunning must not disturb the existing symlink"
+        run: "curl -fsSL https://get.radarhq.io | sh\nSYMLINK_TARGET=$(readlink /usr/local/bin/radar ||\
+          \ true)\nif [ \"$SYMLINK_TARGET\" != \"kubectl-radar\" ]; then\n  echo \"::error::Running install.sh\
+          \ a second time broke the 'radar' symlink (now: '$SYMLINK_TARGET').\"\n  exit 1\nfi\n/usr/local/bin/kubectl-radar\
+          \ --version >/dev/null\n"
+      - name: A pre-existing non-symlink 'radar' file must be left untouched
+        run: "sudo rm -f /usr/local/bin/radar\nprintf '#!/bin/sh\\necho not-ours\\n' | sudo tee /usr/local/bin/radar\
+          \ >/dev/null\nsudo chmod +x /usr/local/bin/radar\n\nINSTALL_OUTPUT=$(curl -fsSL https://get.radarhq.io\
+          \ | sh)\n\nif [ -L /usr/local/bin/radar ]; then\n  echo \"::error::install.sh replaced a pre-existing\
+          \ non-symlink /usr/local/bin/radar with a symlink. It must refuse to clobber a file it doesn't\
+          \ own \u2014 see install.sh's [ -e ... ] && [ ! -L ... ] guard.\"\n  exit 1\nfi\nif ! echo \"\
+          $INSTALL_OUTPUT\" | grep -q \"already exists and is not a symlink\"; then\n  echo \"::error::install.sh\
+          \ did not warn when it skipped the 'radar' shorthand for a pre-existing non-symlink file. Output\
+          \ was:\"\n  echo \"$INSTALL_OUTPUT\"\n  exit 1\nfi\nif ! /usr/local/bin/radar | grep -q not-ours;\
+          \ then\n  echo \"::error::the pre-existing /usr/local/bin/radar file's contents were modified\
+          \ by install.sh.\"\n  exit 1\nfi\n# kubectl-radar itself must still have been updated even though\
+          \ the symlink was skipped.\n/usr/local/bin/kubectl-radar --version | grep -q \"${{ needs.resolve-version.outputs.version\
+          \ }}\"\n"
+    deb-package-linux:
+      name: .deb install (${{ matrix.image }})
+      needs: resolve-version
+      runs-on: ubuntu-latest
+      timeout-minutes: 15
+      strategy:
+        fail-fast: false
+        matrix:
+          image:
+          - debian:12
+          - ubuntu:24.04
+      container:
+        image: ${{ matrix.image }}
+      steps:
+      - name: Install curl
+        run: 'apt-get update -qq
+
+          apt-get install -y -qq curl ca-certificates
+
+          '
+      - name: Download and install the published .deb
+        run: "TAG=\"${{ needs.resolve-version.outputs.tag }}\"\ncurl -fsSL -o /tmp/radar-desktop.deb \\\n\
+          \  \"https://github.com/skyhook-io/radar/releases/download/${TAG}/radar-desktop_${TAG}_linux_amd64.deb\"\
+          \n# `apt-get install ./file.deb` (not `dpkg -i`) so apt resolves the\n# declared GTK/WebKit runtime\
+          \ deps from the distro repos in one step.\napt-get install -y -qq /tmp/radar-desktop.deb\n"
+      - name: Assert version and uninstall cleanly
+        run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nACTUAL=$(radar-desktop --version\
+          \ | awk '{print $2}')\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then\n  echo \"::error::radar-desktop\
+          \ .deb on ${{ matrix.image }} reports v$ACTUAL, latest published release is v$EXPECTED.\"\n  exit\
+          \ 1\nfi\n\napt-get remove -y -qq radar-desktop\nif dpkg -l radar-desktop 2>/dev/null | grep -q\
+          \ '^ii'; then\n  echo \"::error::radar-desktop .deb still reports installed after 'apt-get remove'.\"\
+          \n  exit 1\nfi\n"
+    rpm-package-linux:
+      name: .rpm install (${{ matrix.image }})
+      needs: resolve-version
+      runs-on: ubuntu-latest
+      timeout-minutes: 15
+      strategy:
+        fail-fast: false
+        matrix:
+          image:
+          - fedora:40
+          - rockylinux:9
+      container:
+        image: ${{ matrix.image }}
+      steps:
+      - name: Install curl
+        run: dnf install -y -q curl
+      - name: Download and install the published .rpm
+        run: "TAG=\"${{ needs.resolve-version.outputs.tag }}\"\ncurl -fsSL -o /tmp/radar-desktop.rpm \\\n\
+          \  \"https://github.com/skyhook-io/radar/releases/download/${TAG}/radar-desktop_${TAG}_linux_amd64.rpm\"\
+          \n# `dnf install ./file.rpm` (not `rpm -i`) so dnf resolves the\n# declared gtk3/webkit2gtk4.1\
+          \ deps from the distro repos in one step.\ndnf install -y -q /tmp/radar-desktop.rpm\n"
+      - name: Assert version and uninstall cleanly
+        run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nACTUAL=$(radar-desktop --version\
+          \ | awk '{print $2}')\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then\n  echo \"::error::radar-desktop\
+          \ .rpm on ${{ matrix.image }} reports v$ACTUAL, latest published release is v$EXPECTED.\"\n  exit\
+          \ 1\nfi\n\ndnf remove -y -q radar-desktop\nif rpm -q radar-desktop >/dev/null 2>&1; then\n  echo\
+          \ \"::error::radar-desktop .rpm still reports installed after 'dnf remove'.\"\n  exit 1\nfi\n"
+    launch-smoke-linux:
+      name: "Launch smoke \u2014 no cluster reachable"
+      needs: resolve-version
+      runs-on: ubuntu-latest
+      timeout-minutes: 10
+      steps:
+      - name: Install radar
+        run: curl -fsSL https://get.radarhq.io | sh
+      - name: No kubeconfig anywhere -> fail fast and honestly, don't hang
+        run: "unset KUBECONFIG\nrm -rf \"$HOME/.kube\"\n\nset +e\ntimeout 15s kubectl-radar --no-browser\
+          \ --port 19280 > /tmp/radar-nokubeconfig.log 2>&1\nCODE=$?\nset -e\ncat /tmp/radar-nokubeconfig.log\n\
+          \nif [ \"$CODE\" = \"124\" ]; then\n  echo \"::error::kubectl-radar hung for 15s+ with no kubeconfig\
+          \ present anywhere instead of failing fast. Expected the log.Fatalf path in cmd/explorer/main.go\
+          \ (via app.InitializeK8s) to trigger immediately.\"\n  exit 1\nfi\nif [ \"$CODE\" = \"0\" ]; then\n\
+          \  echo \"::error::kubectl-radar exited 0 with no kubeconfig present anywhere \u2014 expected\
+          \ a nonzero exit, since there is nothing to connect to and no server should silently start.\"\n\
+          \  exit 1\nfi\nif ! grep -qi \"kubeconfig\" /tmp/radar-nokubeconfig.log; then\n  echo \"::error::kubectl-radar\
+          \ failed (exit $CODE) but its output doesn't mention 'kubeconfig' \u2014 a startup failure caused\
+          \ by a missing kubeconfig must say so.\"\n  exit 1\nfi\n"
+      - name: Kubeconfig present but cluster unreachable -> honest disconnected state, no hang or crash
+        run: "mkdir -p \"$HOME/.kube\"\ncat > \"$HOME/.kube/config\" <<'EOF'\napiVersion: v1\nkind: Config\n\
+          clusters:\n- cluster:\n    server: https://192.0.2.1:6443\n  name: unreachable\ncontexts:\n- context:\n\
+          \    cluster: unreachable\n    user: dummy\n  name: unreachable\ncurrent-context: unreachable\n\
+          users:\n- name: dummy\n  user:\n    token: dummy-token\nEOF\n# 192.0.2.1 is RFC 5737 TEST-NET-1:\
+          \ guaranteed non-routable, so the\n# connectivity check fails on its own timeout rather than depending\n\
+          # on network conditions or DNS.\n\nkubectl-radar --no-browser --port 19281 > /tmp/radar-unreachable.log\
+          \ 2>&1 &\nPID=$!\n\nUP=\"\"\nfor i in $(seq 1 20); do\n  if curl -fsS -o /dev/null http://127.0.0.1:19281/api/health\
+          \ 2>/dev/null; then UP=1; break; fi\n  sleep 0.5\ndone\nif [ -z \"$UP\" ]; then\n  echo \"::error::kubectl-radar\
+          \ never bound its HTTP port with an unreachable cluster configured. It must serve immediately\
+          \ and resolve cluster connectivity asynchronously, not block startup on it.\"\n  kill \"$PID\"\
+          \ 2>/dev/null || true\n  cat /tmp/radar-unreachable.log\n  exit 1\nfi\n\nSTATE=\"\"\nRESP=\"\"\
+          \nfor i in $(seq 1 40); do\n  if ! kill -0 \"$PID\" 2>/dev/null; then\n    echo \"::error::kubectl-radar's\
+          \ process died while waiting to detect the unreachable cluster, instead of staying up and reporting\
+          \ a disconnected state.\"\n    cat /tmp/radar-unreachable.log\n    exit 1\n  fi\n  RESP=$(curl\
+          \ -fsS http://127.0.0.1:19281/api/connection 2>/dev/null || true)\n  STATE=$(echo \"$RESP\" |\
+          \ grep -o '\"state\":\"[a-z]*\"')\n  echo \"$STATE\" | grep -q disconnected && break\n  sleep\
+          \ 0.5\ndone\n\necho \"final connection status: $RESP\"\nif ! echo \"$STATE\" | grep -q disconnected;\
+          \ then\n  echo \"::error::kubectl-radar never reported state=disconnected for an unreachable cluster\
+          \ within 20s (last seen: $STATE). A dead cluster must surface as a clear state, not hang indefinitely.\"\
+          \n  kill \"$PID\" 2>/dev/null || true\n  exit 1\nfi\n# errorType/error are always-present JSON\
+          \ keys (see\n# handleConnectionStatus), so check for a non-empty value, not just\n# key presence\
+          \ \u2014 an empty string would still match a bare key grep.\nif ! echo \"$RESP\" | grep -qE '\"\
+          errorType\":\"[^\"]+\"'; then\n  echo \"::error::disconnected state has an empty errorType \u2014\
+          \ an honest no-cluster state has to explain why, not just say 'disconnected'.\"\n  kill \"$PID\"\
+          \ 2>/dev/null || true\n  exit 1\nfi\nif ! kill -0 \"$PID\" 2>/dev/null; then\n  echo \"::error::kubectl-radar\
+          \ crashed right after reporting the disconnected state instead of staying up and retryable.\"\n\
+          \  exit 1\nfi\n\necho \"OK: server up, honest disconnected state with a reason, process still\
+          \ alive.\"\nkill \"$PID\" 2>/dev/null || true\n"
+    macos-cli-formula-version:
+      name: macOS CLI formula version (${{ matrix.arch }})
+      needs: resolve-version
+      strategy:
+        fail-fast: false
+        matrix:
+          include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+      runs-on: ${{ matrix.runner }}
+      steps:
+      - name: brew tap + install radar
+        run: 'brew tap skyhook-io/tap
+
+          brew install radar
+
+          '
+      - name: Assert installed CLI version matches latest release
+        run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
+          \ '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\nif [ \"${INSTALLED}\"\
+          \ != \"${LATEST}\" ]; then\n  echo \"::error::radar CLI Homebrew formula does not match the latest\
+          \ release: 'brew install radar' installs ${INSTALLED}, but the latest published release is ${LATEST}.\
+          \ Formula/radar.rb in skyhook-io/homebrew-tap is normally published by .github/workflows/release.yml's\
+          \ GoReleaser 'brews:' block on every tag. Check whether that GoReleaser step actually ran and\
+          \ published for tag v${LATEST} (an expired/misscoped HOMEBREW_TAP_TOKEN is the usual culprit),\
+          \ then manually bump Formula/radar.rb to v${LATEST} if it didn't.\"\n  exit 1\nfi\n"
+    macos-desktop-cask-signing:
+      name: macOS desktop cask signing (${{ matrix.arch }})
+      needs: resolve-version
+      strategy:
+        fail-fast: false
+        matrix:
+          include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+      runs-on: ${{ matrix.runner }}
+      steps:
+      - name: brew tap + install --cask radar-desktop
+        run: 'brew tap skyhook-io/tap
+
+          brew install --cask radar-desktop
+
+          '
+      - name: Assert installed cask version matches latest release
+        run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(brew list --cask --versions\
+          \ radar-desktop | awk '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\
+          \nif [ \"${INSTALLED}\" != \"${LATEST}\" ]; then\n  echo \"::error::radar-desktop Homebrew cask\
+          \ is STALE: 'brew install --cask radar-desktop' installs ${INSTALLED}, but the latest published\
+          \ release is ${LATEST}. Casks/radar-desktop.rb in skyhook-io/homebrew-tap is bumped by the last\
+          \ job of .github/workflows/release-desktop.yml - check whether that job ran for tag v${LATEST}.\"\
+          \n  exit 1\nfi\n# Note: Radar.app's own Info.plist does NOT reflect this - the Wails\n# build\
+          \ in release-desktop.yml never stamps CFBundleShortVersionString\n# / CFBundleVersion, so the\
+          \ bundle always reports 0.0.0 regardless of\n# the actual release version. Homebrew's cask metadata\
+          \ (checked above)\n# is the only version signal available short of downloading the app\n# and\
+          \ asking it. Worth fixing upstream; not something this CI job can\n# paper over.\n"
+      - name: codesign --verify (deep, strict)
+        run: "APP=\"/Applications/Radar.app\"\nif ! codesign --verify --deep --strict --verbose=2 \"$APP\"\
+          \ 2>codesign-err.log; then\n  echo \"::error::codesign --verify FAILED on the published Radar.app\
+          \ - the code signature is invalid, the binary was modified after signing, or a nested bundle/framework\
+          \ broke the seal. This means the app is not genuinely from KoalaOps's Developer ID; a real user's\
+          \ Mac will refuse to run it or show 'Radar.app is damaged and can't be opened, move it to the\
+          \ Bin.' Re-run the release-desktop.yml codesign + notarize steps for this build; do not re-notarize\
+          \ the existing broken artifact. Details:\"\n  cat codesign-err.log\n  exit 1\nfi\n"
+      - name: spctl Gatekeeper assessment
+        run: "APP=\"/Applications/Radar.app\"\nif ! spctl -a -vvv -t install \"$APP\" 2>spctl-err.log; then\n\
+          \  echo \"::error::spctl -a -t install REJECTED the published Radar.app - Gatekeeper does not\
+          \ consider this app safe to launch (unnotarized, revoked certificate, or signature/notarization\
+          \ mismatch). This is the exact check macOS itself runs on first launch; a real user double-clicking\
+          \ Radar.app will hit the 'damaged app, move to Bin' dialog, not a warnable 'unidentified developer'\
+          \ prompt. Fix the signing/notarization pipeline in release-desktop.yml and cut a new build - a\
+          \ already-published broken artifact cannot be repaired in place. Details:\"\n  cat spctl-err.log\n\
+          \  exit 1\nfi\n"
+      - name: stapler validate (notarization ticket stapled)
+        run: "APP=\"/Applications/Radar.app\"\nif ! xcrun stapler validate \"$APP\" 2>stapler-err.log; then\n\
+          \  echo \"::error::xcrun stapler validate FAILED - no valid notarization ticket is stapled to\
+          \ the published Radar.app. Gatekeeper can sometimes still pass via an online ticket lookup (see\
+          \ the spctl step), but a user who is offline, on a flaky network, or behind a proxy that blocks\
+          \ Apple's ocsp/notary endpoints will get 'Radar.app cannot be opened because the developer cannot\
+          \ be verified' with no fallback. Re-run the 'Staple notarization ticket' step in release-desktop.yml\
+          \ against a successful notarization and re-upload the archive. Details:\"\n  cat stapler-err.log\n\
+          \  exit 1\nfi\n"
+    macos-cli-launch-smoke:
+      name: macOS CLI launch smoke (${{ matrix.arch }})
+      needs: resolve-version
+      strategy:
+        fail-fast: false
+        matrix:
+          include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+      runs-on: ${{ matrix.runner }}
+      steps:
+      - name: brew tap + install radar
+        run: 'brew tap skyhook-io/tap
+
+          brew install radar
+
+          '
+      - name: Assert installed CLI version matches latest release
+        run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
+          \ '{print $2}')\"\nif [ \"${INSTALLED}\" != \"${LATEST}\" ]; then\n  echo \"::error::Launch smoke\
+          \ is about to test radar ${INSTALLED}, not the latest release ${LATEST} - installed version does\
+          \ not match the latest published release. Check the tap and the release pipeline (see the macos-cli-formula-version\
+          \ job for the full check). Skipping the rest of this job would hide that; failing loudly instead.\"\
+          \n  exit 1\nfi\n"
+      - name: Start radar against an unreachable cluster and verify it stays up
+        run: "set -e\nPORT=19280\nWORKDIR=\"${RUNNER_TEMP}/radar-launch-smoke\"\nmkdir -p \"${WORKDIR}\"\
+          \n\n# A syntactically valid kubeconfig pointing at a closed local port -\n# deterministic \"no\
+          \ cluster reachable\" on every runner, instead of\n# depending on the runner happening to have\
+          \ no ~/.kube/config (a\n# totally absent kubeconfig fails even earlier, at flag-parse time,\n\
+          # which is a different and less interesting code path than \"user has\n# Radar configured but\
+          \ their cluster/VPN is down\").\ncat > \"${WORKDIR}/kubeconfig\" <<'EOF'\napiVersion: v1\nkind:\
+          \ Config\nclusters:\n- cluster:\n    server: https://127.0.0.1:65535\n    insecure-skip-tls-verify:\
+          \ true\n  name: unreachable\ncontexts:\n- context:\n    cluster: unreachable\n    user: dummy\n\
+          \  name: unreachable\ncurrent-context: unreachable\nusers:\n- name: dummy\n  user:\n    token:\
+          \ dummy-token\nEOF\n\nexport KUBECONFIG=\"${WORKDIR}/kubeconfig\"\nradar --no-browser --port \"\
+          ${PORT}\" --no-mcp > \"${WORKDIR}/radar.log\" 2>&1 &\nRADAR_PID=$!\n\n# Poll for the port instead\
+          \ of a fixed sleep - bounded at 20s.\nUP=0\nfor _ in $(seq 1 40); do\n  if curl -fsS -o /dev/null\
+          \ \"http://127.0.0.1:${PORT}/\"; then\n    UP=1\n    break\n  fi\n  sleep 0.5\ndone\n\nif [ \"\
+          ${UP}\" -ne 1 ]; then\n  echo \"::error::radar --no-browser never started serving HTTP on --port\
+          \ ${PORT} with no cluster reachable. Expected behavior (per internal/app/bootstrap.go): kubeconfig\
+          \ parsing is local-only and happens before the server binds, so an unreachable-but-configured\
+          \ cluster should NOT stop the server from coming up - the UI is supposed to show a disconnected\
+          \ state instead. Either the server failed to bind, or it crashed before binding. Log:\"\n  cat\
+          \ \"${WORKDIR}/radar.log\"\n  kill \"${RADAR_PID}\" 2>/dev/null || true\n  exit 1\nfi\n\nif !\
+          \ kill -0 \"${RADAR_PID}\" 2>/dev/null; then\n  echo \"::error::radar answered one HTTP request\
+          \ on --port ${PORT} and then the process was gone - it is not staying up to serve a disconnected/no-cluster\
+          \ UI, it is dying right after startup. This is the opposite of the honest behavior a user needs:\
+          \ they'd see the page flash and then nothing. Log:\"\n  cat \"${WORKDIR}/radar.log\"\n  exit 1\n\
+          fi\n\nif grep -qi \"panic:\" \"${WORKDIR}/radar.log\"; then\n  echo \"::error::radar is up and\
+          \ answering HTTP with no cluster reachable, but its log contains a Go panic - it's serving on\
+          \ a wounded/inconsistent process rather than failing cleanly or degrading gracefully. Log:\"\n\
+          \  cat \"${WORKDIR}/radar.log\"\n  kill \"${RADAR_PID}\" 2>/dev/null || true\n  exit 1\nfi\n\n\
+          # Clean shutdown matters too: this is exactly what happens when a\n# user Ctrl-Cs a `radar` they\
+          \ started from a terminal.\nkill -TERM \"${RADAR_PID}\"\nif ! wait \"${RADAR_PID}\"; then\n  echo\
+          \ \"::error::radar did not exit cleanly (non-zero status) after SIGTERM while disconnected from\
+          \ any cluster. A user quitting Radar with no cluster reachable should get a clean shutdown, not\
+          \ a hung process or an error exit. Log:\"\n  cat \"${WORKDIR}/radar.log\"\n  exit 1\nfi\n\necho\
+          \ \"radar served HTTP 200 on --port ${PORT} with no cluster reachable, stayed up, and shut down\
+          \ cleanly on SIGTERM.\"\n"
+    windows-scoop-install:
+      name: Windows / Scoop install
+      needs: resolve-version
+      runs-on: windows-latest
+      timeout-minutes: 10
+      defaults:
+        run:
+          shell: pwsh
+      steps:
+      - name: Install Scoop
+        run: "$ErrorActionPreference = \"Stop\"\n# GitHub-hosted Windows runners execute as an administrator\
+          \ account.\n# Scoop refuses to install under an admin account unless told so\n# explicitly (it's\
+          \ designed as a per-user, non-admin tool) \u2014 this is\n# documented Scoop behaviour, not a\
+          \ guess, but it is the one step in\n# this job most likely to need adjusting once it actually\
+          \ runs on a\n# real runner.\nInvoke-Expression \"& {$(Invoke-RestMethod get.scoop.sh)} -RunAsAdmin\"\
+          \nif ($LASTEXITCODE -ne 0) {\n  throw \"Scoop bootstrap installer exited $LASTEXITCODE\"\n}\n\
+          # Make the shim dir available to subsequent steps. Scoop's own\n# installer updates the *User*\
+          \ PATH environment variable, which\n# this already-running process (and the next GH Actions step,\n\
+          # which is a fresh process) will not automatically pick up.\n$shimDir = \"$env:USERPROFILE\\scoop\\\
+          shims\"\nif (-not (Test-Path $shimDir)) {\n  throw \"Expected Scoop shim dir at $shimDir but it\
+          \ does not exist\"\n}\nAdd-Content -Path $env:GITHUB_PATH -Value $shimDir\n"
+      - name: Add skyhook bucket and install radar + radar-desktop
+        run: '$ErrorActionPreference = "Stop"
+
+          scoop bucket add skyhook https://github.com/skyhook-io/scoop-bucket
+
+          if ($LASTEXITCODE -ne 0) { throw "scoop bucket add failed with exit $LASTEXITCODE" }
+
+
+          scoop install radar radar-desktop
+
+          if ($LASTEXITCODE -ne 0) { throw "scoop install radar radar-desktop failed with exit $LASTEXITCODE"
+          }
+
+          '
+      - name: Assert installed versions match the latest published release
+        run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+          \ }}\"\n\n# `scoop export` is Scoop's own machine-readable listing of what's\n# actually installed\
+          \ (not just what the manifest currently says) \u2014\n# more trustworthy than re-reading the manifest\
+          \ we just fetched.\n$installed = scoop export | ConvertFrom-Json\nif ($LASTEXITCODE -ne 0) { throw\
+          \ \"scoop export failed with exit $LASTEXITCODE\" }\n\nforeach ($pkg in @(\"radar\", \"radar-desktop\"\
+          )) {\n  $app = $installed.apps | Where-Object { $_.Name -eq $pkg }\n  if (-not $app) {\n    throw\
+          \ \"scoop export does not list '$pkg' as installed \u2014 install step above should have failed\
+          \ already\"\n  }\n  Write-Host \"$pkg installed version: $($app.Version)\"\n  if ($app.Version\
+          \ -ne $expected) {\n    throw \"Scoop package '$pkg' is stuck at $($app.Version) but the latest\
+          \ published radar release is $expected. \" + `\n          \"Check the 'Update Scoop manifest'\
+          \ / goreleaser 'scoops:' step for the relevant workflow \" + `\n          \"(release.yml for radar.json,\
+          \ release-desktop.yml for radar-desktop.json) \u2014 the push to \" + `\n          \"skyhook-io/scoop-bucket\
+          \ likely failed or was skipped.\"\n  }\n}\n"
+      - name: Assert the CLI shim is on PATH and reports the right version
+        run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+          \ }}\"\n\n# radar.json's manifest only lists kubectl-radar.exe as a `bin` \u2014\n# there is no\
+          \ scoop-created \"radar\" shim (unlike install.ps1, which\n# manually copies a radar.exe alias).\
+          \ See report for this\n# discrepancy against the manifest's own post_install message.\n$cmd =\
+          \ Get-Command kubectl-radar -ErrorAction SilentlyContinue\nif (-not $cmd) {\n  throw \"kubectl-radar\
+          \ is not on PATH after 'scoop install radar' \u2014 expected the shim at $env:USERPROFILE\\scoop\\\
+          shims\\kubectl-radar.exe\"\n}\n\n$out = & kubectl-radar --version 2>&1\nif ($LASTEXITCODE -ne\
+          \ 0) { throw \"kubectl-radar --version exited $LASTEXITCODE : $out\" }\nif ($out -notmatch \"\
+          ^radar\\s+(\\S+)\") {\n  throw \"Unexpected 'kubectl-radar --version' output: $out\"\n}\n$got\
+          \ = $Matches[1]\nif ($got -ne $expected) {\n  throw \"kubectl-radar --version reports $got but\
+          \ expected $expected\"\n}\nWrite-Host \"kubectl-radar --version OK: $got\"\n"
+      - name: Assert Radar.exe (desktop) was actually installed
+        run: "$ErrorActionPreference = \"Stop\"\n# radar-desktop.json ships a GUI exe with no useful CLI\
+          \ surface to\n# shell out to for version confirmation beyond file presence \u2014 the\n# version-drift\
+          \ guard above (scoop export) is the real check here.\n# See the \"Desktop launch smoke\" job for\
+          \ what more we can honestly\n# assert about Radar.exe.\n$exe = Join-Path \"$env:USERPROFILE\\\
+          scoop\\apps\\radar-desktop\\current\" \"Radar.exe\"\nif (-not (Test-Path $exe)) {\n  throw \"\
+          Expected Radar.exe at $exe after 'scoop install radar-desktop'\"\n}\nWrite-Host \"Found $exe\"\
+          \n"
+    windows-install-script:
+      name: Windows / install.ps1 (${{ matrix.shell }})
+      needs: resolve-version
+      runs-on: windows-latest
+      timeout-minutes: 10
+      strategy:
+        fail-fast: false
+        matrix:
+          shell:
+          - pwsh
+          - powershell
+      defaults:
+        run:
+          shell: ${{ matrix.shell }}
+      steps:
+      - name: Run install.ps1 (first install)
+        run: "$ErrorActionPreference = \"Stop\"\n# Matches the exact one-liner published in the repo's README\
+          \ / release\n# notes \u2014 this is what a real user runs, not a checked-out copy.\nirm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1\
+          \ | iex\n"
+      - name: Assert binary installed where the script claims, and on PATH
+        run: "$ErrorActionPreference = \"Stop\"\n$installDir = \"$env:LOCALAPPDATA\\radar\"\n$kubectlRadar\
+          \ = Join-Path $installDir \"kubectl-radar.exe\"\n$radarAlias = Join-Path $installDir \"radar.exe\"\
+          \n\nif (-not (Test-Path $kubectlRadar)) {\n  throw \"install.ps1 did not place kubectl-radar.exe\
+          \ at $kubectlRadar\"\n}\nif (-not (Test-Path $radarAlias)) {\n  throw \"install.ps1 did not create\
+          \ the radar.exe convenience alias at $radarAlias\"\n}\n\n# Current-process PATH: install.ps1 sets\
+          \ $env:Path itself (line 94),\n# so this must already work in THIS step without a new shell.\n\
+          $cmd = Get-Command kubectl-radar -ErrorAction SilentlyContinue\nif (-not $cmd) {\n  throw \"kubectl-radar\
+          \ not resolvable via PATH in the same session install.ps1 ran in \u2014 \" + `\n        \"expected\
+          \ `$env:Path to already include $installDir\"\n}\nif ($cmd.Source -ne $kubectlRadar) {\n  throw\
+          \ \"PATH resolves kubectl-radar to $($cmd.Source), expected $kubectlRadar (stale copy earlier\
+          \ on PATH?)\"\n}\n\n# Persistent User PATH (registry): this is what a genuinely new\n# terminal\
+          \ (\"restart your terminal\", per the script's own final\n# message) would see. Reading it via\
+          \ [Environment]::GetEnvironmentVariable\n# goes straight to the registry, unlike $env:Path, so\
+          \ this is a real\n# check of persistence rather than of this-process state.\n$persistedPath =\
+          \ [Environment]::GetEnvironmentVariable(\"Path\", \"User\")\n$entries = $persistedPath -split\
+          \ \";\"\nif (-not ($entries -contains $installDir)) {\n  throw \"Persistent User PATH does not\
+          \ contain $installDir after install.ps1. Got: $persistedPath\"\n}\n"
+      - name: Assert reported version matches the latest published release
+        run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+          \ }}\"\n$exe = Join-Path \"$env:LOCALAPPDATA\\radar\" \"kubectl-radar.exe\"\n\n$out = & $exe --version\
+          \ 2>&1\nif ($LASTEXITCODE -ne 0) { throw \"kubectl-radar.exe --version exited $LASTEXITCODE :\
+          \ $out\" }\nif ($out -notmatch \"^radar\\s+(\\S+)\") {\n  throw \"Unexpected 'kubectl-radar.exe\
+          \ --version' output: $out\"\n}\n$got = $Matches[1]\nif ($got -ne $expected) {\n  throw \"install.ps1\
+          \ installed version $got but the latest published radar release is $expected. \" + `\n       \
+          \ \"install.ps1 resolves 'latest' via the GitHub /releases/latest redirect \u2014 check whether\
+          \ that \" + `\n        \"redirect is actually pointing at the newest release (e.g. a draft/pre-release\
+          \ ordering issue).\"\n}\nWrite-Host \"kubectl-radar.exe --version OK: $got\"\n"
+      - name: Re-run install.ps1 and assert idempotency
+        run: "$ErrorActionPreference = \"Stop\"\n$installDir = \"$env:LOCALAPPDATA\\radar\"\n\nirm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1\
+          \ | iex\n\n$kubectlRadar = Join-Path $installDir \"kubectl-radar.exe\"\n$radarAlias = Join-Path\
+          \ $installDir \"radar.exe\"\nif (-not (Test-Path $kubectlRadar)) { throw \"kubectl-radar.exe missing\
+          \ after re-running install.ps1\" }\nif (-not (Test-Path $radarAlias)) { throw \"radar.exe alias\
+          \ missing after re-running install.ps1\" }\n\n# The script's own PATH-append guard (`-notlike\
+          \ \"*$InstallDir*\"`)\n# should have kept this a single entry, not accumulated a duplicate.\n\
+          $entries = ([Environment]::GetEnvironmentVariable(\"Path\", \"User\")) -split \";\"\n$matches\
+          \ = $entries | Where-Object { $_ -eq $installDir }\nif (@($matches).Count -ne 1) {\n  throw \"\
+          Expected exactly one User PATH entry for $installDir after two installs, found $(@($matches).Count):\
+          \ $entries\"\n}\n\n$expected = \"${{ needs.resolve-version.outputs.version }}\"\n$out = & $kubectlRadar\
+          \ --version 2>&1\nif ($LASTEXITCODE -ne 0) { throw \"kubectl-radar.exe --version exited $LASTEXITCODE\
+          \ after re-install: $out\" }\nif ($out -notmatch \"^radar\\s+(\\S+)\" -or $Matches[1] -ne $expected)\
+          \ {\n  throw \"Version changed or broke after idempotent re-install: $out\"\n}\nWrite-Host \"\
+          Idempotent re-run OK\"\n"
+    windows-cli-launch-smoke:
+      name: Windows / CLI launch smoke (no cluster)
+      needs: resolve-version
+      runs-on: windows-latest
+      timeout-minutes: 8
+      defaults:
+        run:
+          shell: pwsh
+      steps:
+      - name: Download and extract the published Windows CLI zip
+        run: "$ErrorActionPreference = \"Stop\"\n$tag = \"${{ needs.resolve-version.outputs.tag }}\"\n$version\
+          \ = \"${{ needs.resolve-version.outputs.version }}\"\n$zipUrl = \"https://github.com/skyhook-io/radar/releases/download/$tag/radar_v${version}_windows_amd64.zip\"\
+          \n$zipPath = Join-Path $env:RUNNER_TEMP \"radar-cli.zip\"\n$extractDir = Join-Path $env:RUNNER_TEMP\
+          \ \"radar-cli\"\n\nInvoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing\nExpand-Archive\
+          \ -Path $zipPath -DestinationPath $extractDir -Force\n\n$exe = Join-Path $extractDir \"kubectl-radar.exe\"\
+          \nif (-not (Test-Path $exe)) {\n  throw \"kubectl-radar.exe not found in $zipUrl after extraction\"\
+          \n}\nAdd-Content -Path $env:GITHUB_ENV -Value \"RADAR_EXE=$exe\"\n"
+      - name: Launch with --no-browser against an unreachable cluster and assert honest behaviour
+        run: "$ErrorActionPreference = \"Stop\"\n$exe = $env:RADAR_EXE\n$port = 19280\n$baseUrl = \"http://127.0.0.1:$port\"\
+          \n\n# A syntactically valid kubeconfig whose server nobody is listening\n# on. 127.0.0.1:1 refuses\
+          \ connections immediately (no DNS lookup,\n# no TLS handshake to wait out) so the connectivity\
+          \ probe fails\n# fast instead of eating its whole 10s timeout budget.\n$kubeconfigPath = Join-Path\
+          \ $env:RUNNER_TEMP \"unreachable-kubeconfig.yaml\"\n@\"\napiVersion: v1\nkind: Config\nclusters:\n\
+          - cluster:\n    server: https://127.0.0.1:1\n    insecure-skip-tls-verify: true\n  name: unreachable\n\
+          contexts:\n- context:\n    cluster: unreachable\n    user: unreachable\n  name: unreachable\n\
+          current-context: unreachable\nusers:\n- name: unreachable\n  user:\n    token: dummy\n\"@ | Set-Content\
+          \ -Path $kubeconfigPath -Encoding utf8\n\n$stdout = Join-Path $env:RUNNER_TEMP \"radar-cli-stdout.log\"\
+          \n$stderr = Join-Path $env:RUNNER_TEMP \"radar-cli-stderr.log\"\n\n# Start-Process without -Wait:\
+          \ this process runs `select {}` forever\n# by design (it's a server) \u2014 waiting for it to\
+          \ exit would hang the\n# job until the job-level timeout-minutes kills the whole runner,\n# which\
+          \ is a much worse failure mode than a clear assertion failure.\n$proc = Start-Process -FilePath\
+          \ $exe `\n  -ArgumentList \"--no-browser\", \"--port\", \"$port\", \"--kubeconfig\", \"`\"$kubeconfigPath`\"\
+          \" `\n  -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr\n\ntry {\n  #\
+          \ Bounded poll for the HTTP listener to come up \u2014 hard cap, not a\n  # bare \"wait until\
+          \ ready\" loop.\n  $ready = $false\n  for ($i = 0; $i -lt 30; $i++) {\n    if ($proc.HasExited)\
+          \ {\n      throw \"kubectl-radar.exe exited early (code $($proc.ExitCode)) before serving \u2014\
+          \ stdout: $(Get-Content $stdout -Raw) stderr: $(Get-Content $stderr -Raw)\"\n    }\n    try {\n\
+          \      $health = Invoke-WebRequest -Uri \"$baseUrl/api/health\" -UseBasicParsing -TimeoutSec 3\n\
+          \      if ($health.StatusCode -eq 200) { $ready = $true; break }\n    } catch {\n      # Not up\
+          \ yet \u2014 expected on early iterations.\n    }\n    Start-Sleep -Seconds 1\n  }\n  if (-not\
+          \ $ready) {\n    throw \"/api/health never returned 200 within 30s \u2014 stdout: $(Get-Content\
+          \ $stdout -Raw) stderr: $(Get-Content $stderr -Raw)\"\n  }\n\n  $healthBody = (Invoke-WebRequest\
+          \ -Uri \"$baseUrl/api/health\" -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json\n  if\
+          \ (-not $healthBody.status) {\n    throw \"/api/health response had no 'status' field: $($healthBody\
+          \ | ConvertTo-Json -Compress)\"\n  }\n  Write-Host \"/api/health status: $($healthBody.status)\"\
+          \n\n  # Bounded poll for the connectivity probe to finish and honestly\n  # report failure. ~10s\
+          \ budget in the source (5s x 2 attempts) plus\n  # slack for CI scheduling jitter.\n  $connectionState\
+          \ = $null\n  $connectionBody = $null\n  for ($i = 0; $i -lt 30; $i++) {\n    $connectionBody =\
+          \ (Invoke-WebRequest -Uri \"$baseUrl/api/connection?contexts=0\" -UseBasicParsing -TimeoutSec\
+          \ 3).Content | ConvertFrom-Json\n    $connectionState = $connectionBody.state\n    if ($connectionState\
+          \ -eq \"disconnected\") { break }\n    Start-Sleep -Seconds 1\n  }\n\n  if ($connectionState -ne\
+          \ \"disconnected\") {\n    throw \"Expected connection state 'disconnected' against an unreachable\
+          \ cluster within 30s, got '$connectionState' \u2014 \" + `\n          \"either radar is misreporting\
+          \ connectivity, or InitializeCluster's behaviour changed from what \" + `\n          \"internal/app/bootstrap.go\
+          \ currently does (Testing... -> StateDisconnected on failure).\"\n  }\n  if ([string]::IsNullOrWhiteSpace($connectionBody.error))\
+          \ {\n    throw \"Connection state is 'disconnected' but the 'error' field is empty \u2014 radar\
+          \ should explain why it's not connected\"\n  }\n  Write-Host \"Connection honestly reported: state=$connectionState\
+          \ error=$($connectionBody.error)\"\n\n  # It should still be alive and serving throughout \u2014\
+          \ a no-cluster\n  # start is not a crash.\n  if ($proc.HasExited) {\n    throw \"kubectl-radar.exe\
+          \ exited unexpectedly (code $($proc.ExitCode)) while it should still be serving the disconnected\
+          \ state\"\n  }\n} finally {\n  if (-not $proc.HasExited) {\n    Stop-Process -Id $proc.Id -Force\
+          \ -ErrorAction SilentlyContinue\n  }\n}\n"
+    windows-desktop-launch-smoke:
+      name: Windows / Desktop launch smoke
+      needs: resolve-version
+      runs-on: windows-latest
+      timeout-minutes: 8
+      defaults:
+        run:
+          shell: pwsh
+      steps:
+      - name: Download and extract the published Windows desktop zip
+        run: "$ErrorActionPreference = \"Stop\"\n$tag = \"${{ needs.resolve-version.outputs.tag }}\"\n$zipUrl\
+          \ = \"https://github.com/skyhook-io/radar/releases/download/$tag/radar-desktop_${tag}_windows_amd64.zip\"\
+          \n$zipPath = Join-Path $env:RUNNER_TEMP \"radar-desktop.zip\"\n$extractDir = Join-Path $env:RUNNER_TEMP\
+          \ \"radar-desktop\"\n\nInvoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing\nExpand-Archive\
+          \ -Path $zipPath -DestinationPath $extractDir -Force\n\n$exe = Join-Path $extractDir \"Radar.exe\"\
+          \nif (-not (Test-Path $exe)) {\n  throw \"Radar.exe not found in $zipUrl after extraction\"\n\
+          }\nAdd-Content -Path $env:GITHUB_ENV -Value \"RADAR_DESKTOP_EXE=$exe\"\n"
+      - name: --version reports the right release (before attempting a GUI launch)
+        run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+          \ }}\"\n$exe = $env:RADAR_DESKTOP_EXE\n\n$out = & $exe --version 2>&1\nif ($LASTEXITCODE -ne 0)\
+          \ { throw \"Radar.exe --version exited $LASTEXITCODE : $out\" }\nif ($out -notmatch \"^radar-desktop\\\
+          s+(\\S+)\") {\n  throw \"Unexpected 'Radar.exe --version' output: $out\"\n}\n$got = $Matches[1]\n\
+          if ($got -ne $expected) {\n  throw \"Radar.exe --version reports $got but the latest published\
+          \ release is $expected\"\n}\nWrite-Host \"Radar.exe --version OK: $got\"\n"
+      - name: Launch the GUI, assert it survives startup and creates a window, then stop it
+        run: "$ErrorActionPreference = \"Stop\"\n$exe = $env:RADAR_DESKTOP_EXE\n$stdout = Join-Path $env:RUNNER_TEMP\
+          \ \"radar-desktop-stdout.log\"\n$stderr = Join-Path $env:RUNNER_TEMP \"radar-desktop-stderr.log\"\
+          \n\n# No -Wait: this is a GUI app with no natural exit. No kubeconfig is\n# provided on purpose\
+          \ \u2014 cmd/desktop/main.go shows that failing K8s\n# init surfaces in the UI instead of crashing\
+          \ the process, so this\n# is the expected, honest \"no cluster\" state for the desktop app too.\n\
+          $proc = Start-Process -FilePath $exe -PassThru `\n  -RedirectStandardOutput $stdout -RedirectStandardError\
+          \ $stderr\n\ntry {\n  # Bounded wait: give the WebView2-backed window time to come up,\n  # but\
+          \ never wait indefinitely.\n  $seconds = 20\n  $survived = $true\n  for ($i = 0; $i -lt $seconds;\
+          \ $i++) {\n    Start-Sleep -Seconds 1\n    if ($proc.HasExited) {\n      $survived = $false\n\
+          \      break\n    }\n  }\n\n  if (-not $survived) {\n    throw \"Radar.exe exited after $i s (code\
+          \ $($proc.ExitCode)) instead of staying up \u2014 stdout: $(Get-Content $stdout -Raw -ErrorAction\
+          \ SilentlyContinue) stderr: $(Get-Content $stderr -Raw -ErrorAction SilentlyContinue)\"\n  }\n\
+          \n  # Refresh the process handle's window info and check a real\n  # top-level window was created\
+          \ \u2014 stronger than \"the process\n  # exists\", weaker than \"the UI is correct\".\n  $proc.Refresh()\n\
+          \  if ($proc.MainWindowHandle -eq [IntPtr]::Zero) {\n    throw \"Radar.exe process is running\
+          \ after ${seconds}s but never created a top-level window (MainWindowHandle is zero) \u2014 \"\
+          \ + `\n          \"likely WebView2 Runtime missing/failing on this runner image, or a startup\
+          \ crash swallowed by the GUI subsystem. \" + `\n          \"stderr: $(Get-Content $stderr -Raw\
+          \ -ErrorAction SilentlyContinue)\"\n  }\n  Write-Host \"Radar.exe alive after ${seconds}s with\
+          \ window handle $($proc.MainWindowHandle) and title '$($proc.MainWindowTitle)'\"\n} finally {\n\
+          \  if (-not $proc.HasExited) {\n    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n\
+          \    Start-Sleep -Seconds 2\n    $stillThere = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue\n\
+          \    if ($stillThere) {\n      throw \"Radar.exe (PID $($proc.Id)) did not terminate within 2s\
+          \ of Stop-Process\"\n    }\n  }\n}\n"
+    cli-e2e:
+      needs: resolve-version
+      runs-on: ubuntu-24.04
+      timeout-minutes: 20
+      strategy:
+        fail-fast: false
+        matrix:
+          include:
+          - scenario: smoke
+            specs: smoke
+          - scenario: resources
+            specs: resources
+          - scenario: topology
+            specs: topology
+          - scenario: timeline
+            specs: timeline
+          - scenario: logs
+            specs: logs
+          - scenario: diagnose
+            specs: diagnose
+      steps:
+      - name: Checkout this harness
+        uses: actions/checkout@v6
+      - name: Install kubectl-radar via the public quick-install script
+        run: curl -fsSL https://get.radarhq.io | sh
+      - name: Put the install location on PATH
+        run: "for dir in /usr/local/bin \"$HOME/.local/bin\"; do\n  if [ -x \"$dir/kubectl-radar\" ]; then\n\
+          \    echo \"$dir\" >> \"$GITHUB_PATH\"\n    break\n  fi\ndone\n"
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dist/cli-e2e/package-lock.json
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-cli-e2e-${{ runner.os }}-${{ hashFiles('dist/cli-e2e/package-lock.json') }}
+      - name: Run CLI e2e
+        env:
+          RADAR_EXPECTED_VERSION: ${{ needs.resolve-version.outputs.version }}
+          CLUSTER: dist-e2e-${{ matrix.scenario }}
+          SCENARIO: ${{ matrix.scenario }}
+          SPECS: ${{ matrix.specs }}
+        working-directory: dist/cli-e2e
+        run: ./run.sh all
+      - name: Collect diagnostics
+        if: always()
+        working-directory: dist/cli-e2e
+        env:
+          CLUSTER: dist-e2e-${{ matrix.scenario }}
+        run: ./run.sh logs > diagnostics.txt 2>&1 || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e-${{ matrix.scenario }}
+          path: 'cli-e2e/playwright-report/
+
+            dist/cli-e2e/test-results/
+
+            dist/cli-e2e/visual/
+
+            dist/cli-e2e/diagnostics.txt
+
+            '
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        working-directory: dist/cli-e2e
+        env:
+          CLUSTER: dist-e2e-${{ matrix.scenario }}
+        run: ./run.sh down || true
+  homebrew-linux:
+    name: Homebrew (Linux)
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Install Homebrew
+      run: 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+        echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+
+        echo "/home/linuxbrew/.linuxbrew/sbin" >> "$GITHUB_PATH"
+
+        '
+    - name: brew tap skyhook-io/tap && brew install radar
+      run: 'brew tap skyhook-io/tap
+
+        brew trust --tap skyhook-io/tap
+
+        brew install skyhook-io/tap/radar
+
+        '
+    - name: Assert installed version matches the latest published release
+      run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nKUBECTL_RADAR_VERSION=$(kubectl-radar\
+        \ --version | awk '{print $2}')\nRADAR_SYMLINK_VERSION=$(radar --version | awk '{print $2}')\n\
+        echo \"expected=$EXPECTED kubectl-radar=$KUBECTL_RADAR_VERSION radar(symlink)=$RADAR_SYMLINK_VERSION\"\
+        \n\nFAIL=0\n[ \"$KUBECTL_RADAR_VERSION\" = \"$EXPECTED\" ] || FAIL=1\n[ \"$RADAR_SYMLINK_VERSION\"\
+        \ = \"$EXPECTED\" ] || FAIL=1\n\nif [ \"$FAIL\" = \"1\" ]; then\n  # Neutral on purpose: this\
+        \ guard exists to catch tap/release drift\n  # whenever it happens, not to assert a specific known\
+        \ cause.\n  echo \"::error::Homebrew-installed radar (kubectl-radar=$KUBECTL_RADAR_VERSION, radar=$RADAR_SYMLINK_VERSION)\
+        \ does not match the latest published release ($EXPECTED). Check skyhook-io/homebrew-tap Formula/radar.rb\
+        \ against github.com/skyhook-io/radar/releases/latest, and confirm radar's release.yml (GoReleaser\
+        \ 'brews:' stanza) ran and pushed successfully for that release.\"\n  exit 1\nfi\necho \"OK: Homebrew\
+        \ formula matches the latest release ($EXPECTED).\"\n"
+  install-script-linux:
+    name: install.sh (Linux)
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Run the published curl-pipe installer
+      run: curl -fsSL https://get.radarhq.io | sh
+    - name: Assert installed version, location, and shorthand symlink
+      run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\n\nif [ ! -x /usr/local/bin/kubectl-radar\
+        \ ]; then\n  echo \"::error::install.sh did not place kubectl-radar at /usr/local/bin/kubectl-radar.\"\
+        \n  exit 1\nfi\nKUBECTL_RADAR_VERSION=$(/usr/local/bin/kubectl-radar --version | awk '{print $2}')\n\
+        if [ \"$KUBECTL_RADAR_VERSION\" != \"$EXPECTED\" ]; then\n  echo \"::error::install.sh installed\
+        \ kubectl-radar v$KUBECTL_RADAR_VERSION but the latest published release is v$EXPECTED. install.sh\
+        \ resolves the version via the github.com/skyhook-io/radar/releases/latest redirect \u2014 check\
+        \ that redirect and the release asset naming (radar_v<version>_linux_<arch>.tar.gz).\"\n  exit\
+        \ 1\nfi\n\nSYMLINK_TARGET=$(readlink /usr/local/bin/radar || true)\nif [ \"$SYMLINK_TARGET\" !=\
+        \ \"kubectl-radar\" ]; then\n  echo \"::error::Expected /usr/local/bin/radar -> kubectl-radar\
+        \ symlink, got '$SYMLINK_TARGET'.\"\n  exit 1\nfi\nRADAR_SHORTHAND_VERSION=$(/usr/local/bin/radar\
+        \ --version | awk '{print $2}')\nif [ \"$RADAR_SHORTHAND_VERSION\" != \"$EXPECTED\" ]; then\n\
+        \  echo \"::error::'radar' shorthand reports v$RADAR_SHORTHAND_VERSION, expected v$EXPECTED.\"\
+        \n  exit 1\nfi\n"
+    - name: "Idempotency \u2014 rerunning must not disturb the existing symlink"
+      run: "curl -fsSL https://get.radarhq.io | sh\nSYMLINK_TARGET=$(readlink /usr/local/bin/radar ||\
+        \ true)\nif [ \"$SYMLINK_TARGET\" != \"kubectl-radar\" ]; then\n  echo \"::error::Running install.sh\
+        \ a second time broke the 'radar' symlink (now: '$SYMLINK_TARGET').\"\n  exit 1\nfi\n/usr/local/bin/kubectl-radar\
+        \ --version >/dev/null\n"
+    - name: A pre-existing non-symlink 'radar' file must be left untouched
+      run: "sudo rm -f /usr/local/bin/radar\nprintf '#!/bin/sh\\necho not-ours\\n' | sudo tee /usr/local/bin/radar\
+        \ >/dev/null\nsudo chmod +x /usr/local/bin/radar\n\nINSTALL_OUTPUT=$(curl -fsSL https://get.radarhq.io\
+        \ | sh)\n\nif [ -L /usr/local/bin/radar ]; then\n  echo \"::error::install.sh replaced a pre-existing\
+        \ non-symlink /usr/local/bin/radar with a symlink. It must refuse to clobber a file it doesn't\
+        \ own \u2014 see install.sh's [ -e ... ] && [ ! -L ... ] guard.\"\n  exit 1\nfi\nif ! echo \"\
+        $INSTALL_OUTPUT\" | grep -q \"already exists and is not a symlink\"; then\n  echo \"::error::install.sh\
+        \ did not warn when it skipped the 'radar' shorthand for a pre-existing non-symlink file. Output\
+        \ was:\"\n  echo \"$INSTALL_OUTPUT\"\n  exit 1\nfi\nif ! /usr/local/bin/radar | grep -q not-ours;\
+        \ then\n  echo \"::error::the pre-existing /usr/local/bin/radar file's contents were modified\
+        \ by install.sh.\"\n  exit 1\nfi\n# kubectl-radar itself must still have been updated even though\
+        \ the symlink was skipped.\n/usr/local/bin/kubectl-radar --version | grep -q \"${{ needs.resolve-version.outputs.version\
+        \ }}\"\n"
+  deb-package-linux:
+    name: .deb install (${{ matrix.image }})
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+        - debian:12
+        - ubuntu:24.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+    - name: Install curl
+      run: 'apt-get update -qq
+
+        apt-get install -y -qq curl ca-certificates
+
+        '
+    - name: Download and install the published .deb
+      run: "TAG=\"${{ needs.resolve-version.outputs.tag }}\"\ncurl -fsSL -o /tmp/radar-desktop.deb \\\n\
+        \  \"https://github.com/skyhook-io/radar/releases/download/${TAG}/radar-desktop_${TAG}_linux_amd64.deb\"\
+        \n# `apt-get install ./file.deb` (not `dpkg -i`) so apt resolves the\n# declared GTK/WebKit runtime\
+        \ deps from the distro repos in one step.\napt-get install -y -qq /tmp/radar-desktop.deb\n"
+    - name: Assert version and uninstall cleanly
+      run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nACTUAL=$(radar-desktop --version\
+        \ | awk '{print $2}')\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then\n  echo \"::error::radar-desktop\
+        \ .deb on ${{ matrix.image }} reports v$ACTUAL, latest published release is v$EXPECTED.\"\n  exit\
+        \ 1\nfi\n\napt-get remove -y -qq radar-desktop\nif dpkg -l radar-desktop 2>/dev/null | grep -q\
+        \ '^ii'; then\n  echo \"::error::radar-desktop .deb still reports installed after 'apt-get remove'.\"\
+        \n  exit 1\nfi\n"
+  rpm-package-linux:
+    name: .rpm install (${{ matrix.image }})
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+        - fedora:40
+        - rockylinux:9
+    container:
+      image: ${{ matrix.image }}
+    steps:
+    - name: Install curl
+      run: dnf install -y -q curl
+    - name: Download and install the published .rpm
+      run: "TAG=\"${{ needs.resolve-version.outputs.tag }}\"\ncurl -fsSL -o /tmp/radar-desktop.rpm \\\n\
+        \  \"https://github.com/skyhook-io/radar/releases/download/${TAG}/radar-desktop_${TAG}_linux_amd64.rpm\"\
+        \n# `dnf install ./file.rpm` (not `rpm -i`) so dnf resolves the\n# declared gtk3/webkit2gtk4.1\
+        \ deps from the distro repos in one step.\ndnf install -y -q /tmp/radar-desktop.rpm\n"
+    - name: Assert version and uninstall cleanly
+      run: "EXPECTED=\"${{ needs.resolve-version.outputs.version }}\"\nACTUAL=$(radar-desktop --version\
+        \ | awk '{print $2}')\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then\n  echo \"::error::radar-desktop\
+        \ .rpm on ${{ matrix.image }} reports v$ACTUAL, latest published release is v$EXPECTED.\"\n  exit\
+        \ 1\nfi\n\ndnf remove -y -q radar-desktop\nif rpm -q radar-desktop >/dev/null 2>&1; then\n  echo\
+        \ \"::error::radar-desktop .rpm still reports installed after 'dnf remove'.\"\n  exit 1\nfi\n"
+  launch-smoke-linux:
+    name: "Launch smoke \u2014 no cluster reachable"
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Install radar
+      run: curl -fsSL https://get.radarhq.io | sh
+    - name: No kubeconfig anywhere -> fail fast and honestly, don't hang
+      run: "unset KUBECONFIG\nrm -rf \"$HOME/.kube\"\n\nset +e\ntimeout 15s kubectl-radar --no-browser\
+        \ --port 19280 > /tmp/radar-nokubeconfig.log 2>&1\nCODE=$?\nset -e\ncat /tmp/radar-nokubeconfig.log\n\
+        \nif [ \"$CODE\" = \"124\" ]; then\n  echo \"::error::kubectl-radar hung for 15s+ with no kubeconfig\
+        \ present anywhere instead of failing fast. Expected the log.Fatalf path in cmd/explorer/main.go\
+        \ (via app.InitializeK8s) to trigger immediately.\"\n  exit 1\nfi\nif [ \"$CODE\" = \"0\" ]; then\n\
+        \  echo \"::error::kubectl-radar exited 0 with no kubeconfig present anywhere \u2014 expected\
+        \ a nonzero exit, since there is nothing to connect to and no server should silently start.\"\n\
+        \  exit 1\nfi\nif ! grep -qi \"kubeconfig\" /tmp/radar-nokubeconfig.log; then\n  echo \"::error::kubectl-radar\
+        \ failed (exit $CODE) but its output doesn't mention 'kubeconfig' \u2014 a startup failure caused\
+        \ by a missing kubeconfig must say so.\"\n  exit 1\nfi\n"
+    - name: Kubeconfig present but cluster unreachable -> honest disconnected state, no hang or crash
+      run: "mkdir -p \"$HOME/.kube\"\ncat > \"$HOME/.kube/config\" <<'EOF'\napiVersion: v1\nkind: Config\n\
+        clusters:\n- cluster:\n    server: https://192.0.2.1:6443\n  name: unreachable\ncontexts:\n- context:\n\
+        \    cluster: unreachable\n    user: dummy\n  name: unreachable\ncurrent-context: unreachable\n\
+        users:\n- name: dummy\n  user:\n    token: dummy-token\nEOF\n# 192.0.2.1 is RFC 5737 TEST-NET-1:\
+        \ guaranteed non-routable, so the\n# connectivity check fails on its own timeout rather than depending\n\
+        # on network conditions or DNS.\n\nkubectl-radar --no-browser --port 19281 > /tmp/radar-unreachable.log\
+        \ 2>&1 &\nPID=$!\n\nUP=\"\"\nfor i in $(seq 1 20); do\n  if curl -fsS -o /dev/null http://127.0.0.1:19281/api/health\
+        \ 2>/dev/null; then UP=1; break; fi\n  sleep 0.5\ndone\nif [ -z \"$UP\" ]; then\n  echo \"::error::kubectl-radar\
+        \ never bound its HTTP port with an unreachable cluster configured. It must serve immediately\
+        \ and resolve cluster connectivity asynchronously, not block startup on it.\"\n  kill \"$PID\"\
+        \ 2>/dev/null || true\n  cat /tmp/radar-unreachable.log\n  exit 1\nfi\n\nSTATE=\"\"\nRESP=\"\"\
+        \nfor i in $(seq 1 40); do\n  if ! kill -0 \"$PID\" 2>/dev/null; then\n    echo \"::error::kubectl-radar's\
+        \ process died while waiting to detect the unreachable cluster, instead of staying up and reporting\
+        \ a disconnected state.\"\n    cat /tmp/radar-unreachable.log\n    exit 1\n  fi\n  RESP=$(curl\
+        \ -fsS http://127.0.0.1:19281/api/connection 2>/dev/null || true)\n  STATE=$(echo \"$RESP\" |\
+        \ grep -o '\"state\":\"[a-z]*\"')\n  echo \"$STATE\" | grep -q disconnected && break\n  sleep\
+        \ 0.5\ndone\n\necho \"final connection status: $RESP\"\nif ! echo \"$STATE\" | grep -q disconnected;\
+        \ then\n  echo \"::error::kubectl-radar never reported state=disconnected for an unreachable cluster\
+        \ within 20s (last seen: $STATE). A dead cluster must surface as a clear state, not hang indefinitely.\"\
+        \n  kill \"$PID\" 2>/dev/null || true\n  exit 1\nfi\n# errorType/error are always-present JSON\
+        \ keys (see\n# handleConnectionStatus), so check for a non-empty value, not just\n# key presence\
+        \ \u2014 an empty string would still match a bare key grep.\nif ! echo \"$RESP\" | grep -qE '\"\
+        errorType\":\"[^\"]+\"'; then\n  echo \"::error::disconnected state has an empty errorType \u2014\
+        \ an honest no-cluster state has to explain why, not just say 'disconnected'.\"\n  kill \"$PID\"\
+        \ 2>/dev/null || true\n  exit 1\nfi\nif ! kill -0 \"$PID\" 2>/dev/null; then\n  echo \"::error::kubectl-radar\
+        \ crashed right after reporting the disconnected state instead of staying up and retryable.\"\n\
+        \  exit 1\nfi\n\necho \"OK: server up, honest disconnected state with a reason, process still\
+        \ alive.\"\nkill \"$PID\" 2>/dev/null || true\n"
+  macos-cli-formula-version:
+    name: macOS CLI formula version (${{ matrix.arch }})
+    needs: resolve-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-latest
+          arch: arm64
+        - runner: macos-15-intel
+          arch: amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: brew tap + install radar
+      run: 'brew tap skyhook-io/tap
+
+        brew install radar
+
+        '
+    - name: Assert installed CLI version matches latest release
+      run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
+        \ '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\nif [ \"${INSTALLED}\"\
+        \ != \"${LATEST}\" ]; then\n  echo \"::error::radar CLI Homebrew formula does not match the latest\
+        \ release: 'brew install radar' installs ${INSTALLED}, but the latest published release is ${LATEST}.\
+        \ Formula/radar.rb in skyhook-io/homebrew-tap is normally published by .github/workflows/release.yml's\
+        \ GoReleaser 'brews:' block on every tag. Check whether that GoReleaser step actually ran and\
+        \ published for tag v${LATEST} (an expired/misscoped HOMEBREW_TAP_TOKEN is the usual culprit),\
+        \ then manually bump Formula/radar.rb to v${LATEST} if it didn't.\"\n  exit 1\nfi\n"
+  macos-desktop-cask-signing:
+    name: macOS desktop cask signing (${{ matrix.arch }})
+    needs: resolve-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-latest
+          arch: arm64
+        - runner: macos-15-intel
+          arch: amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: brew tap + install --cask radar-desktop
+      run: 'brew tap skyhook-io/tap
+
+        brew install --cask radar-desktop
+
+        '
+    - name: Assert installed cask version matches latest release
+      run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(brew list --cask --versions\
+        \ radar-desktop | awk '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\
+        \nif [ \"${INSTALLED}\" != \"${LATEST}\" ]; then\n  echo \"::error::radar-desktop Homebrew cask\
+        \ is STALE: 'brew install --cask radar-desktop' installs ${INSTALLED}, but the latest published\
+        \ release is ${LATEST}. Casks/radar-desktop.rb in skyhook-io/homebrew-tap is bumped by the last\
+        \ job of .github/workflows/release-desktop.yml - check whether that job ran for tag v${LATEST}.\"\
+        \n  exit 1\nfi\n# Note: Radar.app's own Info.plist does NOT reflect this - the Wails\n# build\
+        \ in release-desktop.yml never stamps CFBundleShortVersionString\n# / CFBundleVersion, so the\
+        \ bundle always reports 0.0.0 regardless of\n# the actual release version. Homebrew's cask metadata\
+        \ (checked above)\n# is the only version signal available short of downloading the app\n# and\
+        \ asking it. Worth fixing upstream; not something this CI job can\n# paper over.\n"
+    - name: codesign --verify (deep, strict)
+      run: "APP=\"/Applications/Radar.app\"\nif ! codesign --verify --deep --strict --verbose=2 \"$APP\"\
+        \ 2>codesign-err.log; then\n  echo \"::error::codesign --verify FAILED on the published Radar.app\
+        \ - the code signature is invalid, the binary was modified after signing, or a nested bundle/framework\
+        \ broke the seal. This means the app is not genuinely from KoalaOps's Developer ID; a real user's\
+        \ Mac will refuse to run it or show 'Radar.app is damaged and can't be opened, move it to the\
+        \ Bin.' Re-run the release-desktop.yml codesign + notarize steps for this build; do not re-notarize\
+        \ the existing broken artifact. Details:\"\n  cat codesign-err.log\n  exit 1\nfi\n"
+    - name: spctl Gatekeeper assessment
+      run: "APP=\"/Applications/Radar.app\"\nif ! spctl -a -vvv -t install \"$APP\" 2>spctl-err.log; then\n\
+        \  echo \"::error::spctl -a -t install REJECTED the published Radar.app - Gatekeeper does not\
+        \ consider this app safe to launch (unnotarized, revoked certificate, or signature/notarization\
+        \ mismatch). This is the exact check macOS itself runs on first launch; a real user double-clicking\
+        \ Radar.app will hit the 'damaged app, move to Bin' dialog, not a warnable 'unidentified developer'\
+        \ prompt. Fix the signing/notarization pipeline in release-desktop.yml and cut a new build - a\
+        \ already-published broken artifact cannot be repaired in place. Details:\"\n  cat spctl-err.log\n\
+        \  exit 1\nfi\n"
+    - name: stapler validate (notarization ticket stapled)
+      run: "APP=\"/Applications/Radar.app\"\nif ! xcrun stapler validate \"$APP\" 2>stapler-err.log; then\n\
+        \  echo \"::error::xcrun stapler validate FAILED - no valid notarization ticket is stapled to\
+        \ the published Radar.app. Gatekeeper can sometimes still pass via an online ticket lookup (see\
+        \ the spctl step), but a user who is offline, on a flaky network, or behind a proxy that blocks\
+        \ Apple's ocsp/notary endpoints will get 'Radar.app cannot be opened because the developer cannot\
+        \ be verified' with no fallback. Re-run the 'Staple notarization ticket' step in release-desktop.yml\
+        \ against a successful notarization and re-upload the archive. Details:\"\n  cat stapler-err.log\n\
+        \  exit 1\nfi\n"
+  macos-cli-launch-smoke:
+    name: macOS CLI launch smoke (${{ matrix.arch }})
+    needs: resolve-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-latest
+          arch: arm64
+        - runner: macos-15-intel
+          arch: amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: brew tap + install radar
+      run: 'brew tap skyhook-io/tap
+
+        brew install radar
+
+        '
+    - name: Assert installed CLI version matches latest release
+      run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
+        \ '{print $2}')\"\nif [ \"${INSTALLED}\" != \"${LATEST}\" ]; then\n  echo \"::error::Launch smoke\
+        \ is about to test radar ${INSTALLED}, not the latest release ${LATEST} - installed version does\
+        \ not match the latest published release. Check the tap and the release pipeline (see the macos-cli-formula-version\
+        \ job for the full check). Skipping the rest of this job would hide that; failing loudly instead.\"\
+        \n  exit 1\nfi\n"
+    - name: Start radar against an unreachable cluster and verify it stays up
+      run: "set -e\nPORT=19280\nWORKDIR=\"${RUNNER_TEMP}/radar-launch-smoke\"\nmkdir -p \"${WORKDIR}\"\
+        \n\n# A syntactically valid kubeconfig pointing at a closed local port -\n# deterministic \"no\
+        \ cluster reachable\" on every runner, instead of\n# depending on the runner happening to have\
+        \ no ~/.kube/config (a\n# totally absent kubeconfig fails even earlier, at flag-parse time,\n\
+        # which is a different and less interesting code path than \"user has\n# Radar configured but\
+        \ their cluster/VPN is down\").\ncat > \"${WORKDIR}/kubeconfig\" <<'EOF'\napiVersion: v1\nkind:\
+        \ Config\nclusters:\n- cluster:\n    server: https://127.0.0.1:65535\n    insecure-skip-tls-verify:\
+        \ true\n  name: unreachable\ncontexts:\n- context:\n    cluster: unreachable\n    user: dummy\n\
+        \  name: unreachable\ncurrent-context: unreachable\nusers:\n- name: dummy\n  user:\n    token:\
+        \ dummy-token\nEOF\n\nexport KUBECONFIG=\"${WORKDIR}/kubeconfig\"\nradar --no-browser --port \"\
+        ${PORT}\" --no-mcp > \"${WORKDIR}/radar.log\" 2>&1 &\nRADAR_PID=$!\n\n# Poll for the port instead\
+        \ of a fixed sleep - bounded at 20s.\nUP=0\nfor _ in $(seq 1 40); do\n  if curl -fsS -o /dev/null\
+        \ \"http://127.0.0.1:${PORT}/\"; then\n    UP=1\n    break\n  fi\n  sleep 0.5\ndone\n\nif [ \"\
+        ${UP}\" -ne 1 ]; then\n  echo \"::error::radar --no-browser never started serving HTTP on --port\
+        \ ${PORT} with no cluster reachable. Expected behavior (per internal/app/bootstrap.go): kubeconfig\
+        \ parsing is local-only and happens before the server binds, so an unreachable-but-configured\
+        \ cluster should NOT stop the server from coming up - the UI is supposed to show a disconnected\
+        \ state instead. Either the server failed to bind, or it crashed before binding. Log:\"\n  cat\
+        \ \"${WORKDIR}/radar.log\"\n  kill \"${RADAR_PID}\" 2>/dev/null || true\n  exit 1\nfi\n\nif !\
+        \ kill -0 \"${RADAR_PID}\" 2>/dev/null; then\n  echo \"::error::radar answered one HTTP request\
+        \ on --port ${PORT} and then the process was gone - it is not staying up to serve a disconnected/no-cluster\
+        \ UI, it is dying right after startup. This is the opposite of the honest behavior a user needs:\
+        \ they'd see the page flash and then nothing. Log:\"\n  cat \"${WORKDIR}/radar.log\"\n  exit 1\n\
+        fi\n\nif grep -qi \"panic:\" \"${WORKDIR}/radar.log\"; then\n  echo \"::error::radar is up and\
+        \ answering HTTP with no cluster reachable, but its log contains a Go panic - it's serving on\
+        \ a wounded/inconsistent process rather than failing cleanly or degrading gracefully. Log:\"\n\
+        \  cat \"${WORKDIR}/radar.log\"\n  kill \"${RADAR_PID}\" 2>/dev/null || true\n  exit 1\nfi\n\n\
+        # Clean shutdown matters too: this is exactly what happens when a\n# user Ctrl-Cs a `radar` they\
+        \ started from a terminal.\nkill -TERM \"${RADAR_PID}\"\nif ! wait \"${RADAR_PID}\"; then\n  echo\
+        \ \"::error::radar did not exit cleanly (non-zero status) after SIGTERM while disconnected from\
+        \ any cluster. A user quitting Radar with no cluster reachable should get a clean shutdown, not\
+        \ a hung process or an error exit. Log:\"\n  cat \"${WORKDIR}/radar.log\"\n  exit 1\nfi\n\necho\
+        \ \"radar served HTTP 200 on --port ${PORT} with no cluster reachable, stayed up, and shut down\
+        \ cleanly on SIGTERM.\"\n"
+  windows-scoop-install:
+    name: Windows / Scoop install
+    needs: resolve-version
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+    - name: Install Scoop
+      run: "$ErrorActionPreference = \"Stop\"\n# GitHub-hosted Windows runners execute as an administrator\
+        \ account.\n# Scoop refuses to install under an admin account unless told so\n# explicitly (it's\
+        \ designed as a per-user, non-admin tool) \u2014 this is\n# documented Scoop behaviour, not a\
+        \ guess, but it is the one step in\n# this job most likely to need adjusting once it actually\
+        \ runs on a\n# real runner.\nInvoke-Expression \"& {$(Invoke-RestMethod get.scoop.sh)} -RunAsAdmin\"\
+        \nif ($LASTEXITCODE -ne 0) {\n  throw \"Scoop bootstrap installer exited $LASTEXITCODE\"\n}\n\
+        # Make the shim dir available to subsequent steps. Scoop's own\n# installer updates the *User*\
+        \ PATH environment variable, which\n# this already-running process (and the next GH Actions step,\n\
+        # which is a fresh process) will not automatically pick up.\n$shimDir = \"$env:USERPROFILE\\scoop\\\
+        shims\"\nif (-not (Test-Path $shimDir)) {\n  throw \"Expected Scoop shim dir at $shimDir but it\
+        \ does not exist\"\n}\nAdd-Content -Path $env:GITHUB_PATH -Value $shimDir\n"
+    - name: Add skyhook bucket and install radar + radar-desktop
+      run: '$ErrorActionPreference = "Stop"
+
+        scoop bucket add skyhook https://github.com/skyhook-io/scoop-bucket
+
+        if ($LASTEXITCODE -ne 0) { throw "scoop bucket add failed with exit $LASTEXITCODE" }
+
+
+        scoop install radar radar-desktop
+
+        if ($LASTEXITCODE -ne 0) { throw "scoop install radar radar-desktop failed with exit $LASTEXITCODE"
+        }
+
+        '
+    - name: Assert installed versions match the latest published release
+      run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+        \ }}\"\n\n# `scoop export` is Scoop's own machine-readable listing of what's\n# actually installed\
+        \ (not just what the manifest currently says) \u2014\n# more trustworthy than re-reading the manifest\
+        \ we just fetched.\n$installed = scoop export | ConvertFrom-Json\nif ($LASTEXITCODE -ne 0) { throw\
+        \ \"scoop export failed with exit $LASTEXITCODE\" }\n\nforeach ($pkg in @(\"radar\", \"radar-desktop\"\
+        )) {\n  $app = $installed.apps | Where-Object { $_.Name -eq $pkg }\n  if (-not $app) {\n    throw\
+        \ \"scoop export does not list '$pkg' as installed \u2014 install step above should have failed\
+        \ already\"\n  }\n  Write-Host \"$pkg installed version: $($app.Version)\"\n  if ($app.Version\
+        \ -ne $expected) {\n    throw \"Scoop package '$pkg' is stuck at $($app.Version) but the latest\
+        \ published radar release is $expected. \" + `\n          \"Check the 'Update Scoop manifest'\
+        \ / goreleaser 'scoops:' step for the relevant workflow \" + `\n          \"(release.yml for radar.json,\
+        \ release-desktop.yml for radar-desktop.json) \u2014 the push to \" + `\n          \"skyhook-io/scoop-bucket\
+        \ likely failed or was skipped.\"\n  }\n}\n"
+    - name: Assert the CLI shim is on PATH and reports the right version
+      run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+        \ }}\"\n\n# radar.json's manifest only lists kubectl-radar.exe as a `bin` \u2014\n# there is no\
+        \ scoop-created \"radar\" shim (unlike install.ps1, which\n# manually copies a radar.exe alias).\
+        \ See report for this\n# discrepancy against the manifest's own post_install message.\n$cmd =\
+        \ Get-Command kubectl-radar -ErrorAction SilentlyContinue\nif (-not $cmd) {\n  throw \"kubectl-radar\
+        \ is not on PATH after 'scoop install radar' \u2014 expected the shim at $env:USERPROFILE\\scoop\\\
+        shims\\kubectl-radar.exe\"\n}\n\n$out = & kubectl-radar --version 2>&1\nif ($LASTEXITCODE -ne\
+        \ 0) { throw \"kubectl-radar --version exited $LASTEXITCODE : $out\" }\nif ($out -notmatch \"\
+        ^radar\\s+(\\S+)\") {\n  throw \"Unexpected 'kubectl-radar --version' output: $out\"\n}\n$got\
+        \ = $Matches[1]\nif ($got -ne $expected) {\n  throw \"kubectl-radar --version reports $got but\
+        \ expected $expected\"\n}\nWrite-Host \"kubectl-radar --version OK: $got\"\n"
+    - name: Assert Radar.exe (desktop) was actually installed
+      run: "$ErrorActionPreference = \"Stop\"\n# radar-desktop.json ships a GUI exe with no useful CLI\
+        \ surface to\n# shell out to for version confirmation beyond file presence \u2014 the\n# version-drift\
+        \ guard above (scoop export) is the real check here.\n# See the \"Desktop launch smoke\" job for\
+        \ what more we can honestly\n# assert about Radar.exe.\n$exe = Join-Path \"$env:USERPROFILE\\\
+        scoop\\apps\\radar-desktop\\current\" \"Radar.exe\"\nif (-not (Test-Path $exe)) {\n  throw \"\
+        Expected Radar.exe at $exe after 'scoop install radar-desktop'\"\n}\nWrite-Host \"Found $exe\"\
+        \n"
+  windows-install-script:
+    name: Windows / install.ps1 (${{ matrix.shell }})
+    needs: resolve-version
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shell:
+        - pwsh
+        - powershell
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+    - name: Run install.ps1 (first install)
+      run: "$ErrorActionPreference = \"Stop\"\n# Matches the exact one-liner published in the repo's README\
+        \ / release\n# notes \u2014 this is what a real user runs, not a checked-out copy.\nirm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1\
+        \ | iex\n"
+    - name: Assert binary installed where the script claims, and on PATH
+      run: "$ErrorActionPreference = \"Stop\"\n$installDir = \"$env:LOCALAPPDATA\\radar\"\n$kubectlRadar\
+        \ = Join-Path $installDir \"kubectl-radar.exe\"\n$radarAlias = Join-Path $installDir \"radar.exe\"\
+        \n\nif (-not (Test-Path $kubectlRadar)) {\n  throw \"install.ps1 did not place kubectl-radar.exe\
+        \ at $kubectlRadar\"\n}\nif (-not (Test-Path $radarAlias)) {\n  throw \"install.ps1 did not create\
+        \ the radar.exe convenience alias at $radarAlias\"\n}\n\n# Current-process PATH: install.ps1 sets\
+        \ $env:Path itself (line 94),\n# so this must already work in THIS step without a new shell.\n\
+        $cmd = Get-Command kubectl-radar -ErrorAction SilentlyContinue\nif (-not $cmd) {\n  throw \"kubectl-radar\
+        \ not resolvable via PATH in the same session install.ps1 ran in \u2014 \" + `\n        \"expected\
+        \ `$env:Path to already include $installDir\"\n}\nif ($cmd.Source -ne $kubectlRadar) {\n  throw\
+        \ \"PATH resolves kubectl-radar to $($cmd.Source), expected $kubectlRadar (stale copy earlier\
+        \ on PATH?)\"\n}\n\n# Persistent User PATH (registry): this is what a genuinely new\n# terminal\
+        \ (\"restart your terminal\", per the script's own final\n# message) would see. Reading it via\
+        \ [Environment]::GetEnvironmentVariable\n# goes straight to the registry, unlike $env:Path, so\
+        \ this is a real\n# check of persistence rather than of this-process state.\n$persistedPath =\
+        \ [Environment]::GetEnvironmentVariable(\"Path\", \"User\")\n$entries = $persistedPath -split\
+        \ \";\"\nif (-not ($entries -contains $installDir)) {\n  throw \"Persistent User PATH does not\
+        \ contain $installDir after install.ps1. Got: $persistedPath\"\n}\n"
+    - name: Assert reported version matches the latest published release
+      run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+        \ }}\"\n$exe = Join-Path \"$env:LOCALAPPDATA\\radar\" \"kubectl-radar.exe\"\n\n$out = & $exe --version\
+        \ 2>&1\nif ($LASTEXITCODE -ne 0) { throw \"kubectl-radar.exe --version exited $LASTEXITCODE :\
+        \ $out\" }\nif ($out -notmatch \"^radar\\s+(\\S+)\") {\n  throw \"Unexpected 'kubectl-radar.exe\
+        \ --version' output: $out\"\n}\n$got = $Matches[1]\nif ($got -ne $expected) {\n  throw \"install.ps1\
+        \ installed version $got but the latest published radar release is $expected. \" + `\n       \
+        \ \"install.ps1 resolves 'latest' via the GitHub /releases/latest redirect \u2014 check whether\
+        \ that \" + `\n        \"redirect is actually pointing at the newest release (e.g. a draft/pre-release\
+        \ ordering issue).\"\n}\nWrite-Host \"kubectl-radar.exe --version OK: $got\"\n"
+    - name: Re-run install.ps1 and assert idempotency
+      run: "$ErrorActionPreference = \"Stop\"\n$installDir = \"$env:LOCALAPPDATA\\radar\"\n\nirm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1\
+        \ | iex\n\n$kubectlRadar = Join-Path $installDir \"kubectl-radar.exe\"\n$radarAlias = Join-Path\
+        \ $installDir \"radar.exe\"\nif (-not (Test-Path $kubectlRadar)) { throw \"kubectl-radar.exe missing\
+        \ after re-running install.ps1\" }\nif (-not (Test-Path $radarAlias)) { throw \"radar.exe alias\
+        \ missing after re-running install.ps1\" }\n\n# The script's own PATH-append guard (`-notlike\
+        \ \"*$InstallDir*\"`)\n# should have kept this a single entry, not accumulated a duplicate.\n\
+        $entries = ([Environment]::GetEnvironmentVariable(\"Path\", \"User\")) -split \";\"\n$matches\
+        \ = $entries | Where-Object { $_ -eq $installDir }\nif (@($matches).Count -ne 1) {\n  throw \"\
+        Expected exactly one User PATH entry for $installDir after two installs, found $(@($matches).Count):\
+        \ $entries\"\n}\n\n$expected = \"${{ needs.resolve-version.outputs.version }}\"\n$out = & $kubectlRadar\
+        \ --version 2>&1\nif ($LASTEXITCODE -ne 0) { throw \"kubectl-radar.exe --version exited $LASTEXITCODE\
+        \ after re-install: $out\" }\nif ($out -notmatch \"^radar\\s+(\\S+)\" -or $Matches[1] -ne $expected)\
+        \ {\n  throw \"Version changed or broke after idempotent re-install: $out\"\n}\nWrite-Host \"\
+        Idempotent re-run OK\"\n"
+  windows-cli-launch-smoke:
+    name: Windows / CLI launch smoke (no cluster)
+    needs: resolve-version
+    runs-on: windows-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+    - name: Download and extract the published Windows CLI zip
+      run: "$ErrorActionPreference = \"Stop\"\n$tag = \"${{ needs.resolve-version.outputs.tag }}\"\n$version\
+        \ = \"${{ needs.resolve-version.outputs.version }}\"\n$zipUrl = \"https://github.com/skyhook-io/radar/releases/download/$tag/radar_v${version}_windows_amd64.zip\"\
+        \n$zipPath = Join-Path $env:RUNNER_TEMP \"radar-cli.zip\"\n$extractDir = Join-Path $env:RUNNER_TEMP\
+        \ \"radar-cli\"\n\nInvoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing\nExpand-Archive\
+        \ -Path $zipPath -DestinationPath $extractDir -Force\n\n$exe = Join-Path $extractDir \"kubectl-radar.exe\"\
+        \nif (-not (Test-Path $exe)) {\n  throw \"kubectl-radar.exe not found in $zipUrl after extraction\"\
+        \n}\nAdd-Content -Path $env:GITHUB_ENV -Value \"RADAR_EXE=$exe\"\n"
+    - name: Launch with --no-browser against an unreachable cluster and assert honest behaviour
+      run: "$ErrorActionPreference = \"Stop\"\n$exe = $env:RADAR_EXE\n$port = 19280\n$baseUrl = \"http://127.0.0.1:$port\"\
+        \n\n# A syntactically valid kubeconfig whose server nobody is listening\n# on. 127.0.0.1:1 refuses\
+        \ connections immediately (no DNS lookup,\n# no TLS handshake to wait out) so the connectivity\
+        \ probe fails\n# fast instead of eating its whole 10s timeout budget.\n$kubeconfigPath = Join-Path\
+        \ $env:RUNNER_TEMP \"unreachable-kubeconfig.yaml\"\n@\"\napiVersion: v1\nkind: Config\nclusters:\n\
+        - cluster:\n    server: https://127.0.0.1:1\n    insecure-skip-tls-verify: true\n  name: unreachable\n\
+        contexts:\n- context:\n    cluster: unreachable\n    user: unreachable\n  name: unreachable\n\
+        current-context: unreachable\nusers:\n- name: unreachable\n  user:\n    token: dummy\n\"@ | Set-Content\
+        \ -Path $kubeconfigPath -Encoding utf8\n\n$stdout = Join-Path $env:RUNNER_TEMP \"radar-cli-stdout.log\"\
+        \n$stderr = Join-Path $env:RUNNER_TEMP \"radar-cli-stderr.log\"\n\n# Start-Process without -Wait:\
+        \ this process runs `select {}` forever\n# by design (it's a server) \u2014 waiting for it to\
+        \ exit would hang the\n# job until the job-level timeout-minutes kills the whole runner,\n# which\
+        \ is a much worse failure mode than a clear assertion failure.\n$proc = Start-Process -FilePath\
+        \ $exe `\n  -ArgumentList \"--no-browser\", \"--port\", \"$port\", \"--kubeconfig\", \"`\"$kubeconfigPath`\"\
+        \" `\n  -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr\n\ntry {\n  #\
+        \ Bounded poll for the HTTP listener to come up \u2014 hard cap, not a\n  # bare \"wait until\
+        \ ready\" loop.\n  $ready = $false\n  for ($i = 0; $i -lt 30; $i++) {\n    if ($proc.HasExited)\
+        \ {\n      throw \"kubectl-radar.exe exited early (code $($proc.ExitCode)) before serving \u2014\
+        \ stdout: $(Get-Content $stdout -Raw) stderr: $(Get-Content $stderr -Raw)\"\n    }\n    try {\n\
+        \      $health = Invoke-WebRequest -Uri \"$baseUrl/api/health\" -UseBasicParsing -TimeoutSec 3\n\
+        \      if ($health.StatusCode -eq 200) { $ready = $true; break }\n    } catch {\n      # Not up\
+        \ yet \u2014 expected on early iterations.\n    }\n    Start-Sleep -Seconds 1\n  }\n  if (-not\
+        \ $ready) {\n    throw \"/api/health never returned 200 within 30s \u2014 stdout: $(Get-Content\
+        \ $stdout -Raw) stderr: $(Get-Content $stderr -Raw)\"\n  }\n\n  $healthBody = (Invoke-WebRequest\
+        \ -Uri \"$baseUrl/api/health\" -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json\n  if\
+        \ (-not $healthBody.status) {\n    throw \"/api/health response had no 'status' field: $($healthBody\
+        \ | ConvertTo-Json -Compress)\"\n  }\n  Write-Host \"/api/health status: $($healthBody.status)\"\
+        \n\n  # Bounded poll for the connectivity probe to finish and honestly\n  # report failure. ~10s\
+        \ budget in the source (5s x 2 attempts) plus\n  # slack for CI scheduling jitter.\n  $connectionState\
+        \ = $null\n  $connectionBody = $null\n  for ($i = 0; $i -lt 30; $i++) {\n    $connectionBody =\
+        \ (Invoke-WebRequest -Uri \"$baseUrl/api/connection?contexts=0\" -UseBasicParsing -TimeoutSec\
+        \ 3).Content | ConvertFrom-Json\n    $connectionState = $connectionBody.state\n    if ($connectionState\
+        \ -eq \"disconnected\") { break }\n    Start-Sleep -Seconds 1\n  }\n\n  if ($connectionState -ne\
+        \ \"disconnected\") {\n    throw \"Expected connection state 'disconnected' against an unreachable\
+        \ cluster within 30s, got '$connectionState' \u2014 \" + `\n          \"either radar is misreporting\
+        \ connectivity, or InitializeCluster's behaviour changed from what \" + `\n          \"internal/app/bootstrap.go\
+        \ currently does (Testing... -> StateDisconnected on failure).\"\n  }\n  if ([string]::IsNullOrWhiteSpace($connectionBody.error))\
+        \ {\n    throw \"Connection state is 'disconnected' but the 'error' field is empty \u2014 radar\
+        \ should explain why it's not connected\"\n  }\n  Write-Host \"Connection honestly reported: state=$connectionState\
+        \ error=$($connectionBody.error)\"\n\n  # It should still be alive and serving throughout \u2014\
+        \ a no-cluster\n  # start is not a crash.\n  if ($proc.HasExited) {\n    throw \"kubectl-radar.exe\
+        \ exited unexpectedly (code $($proc.ExitCode)) while it should still be serving the disconnected\
+        \ state\"\n  }\n} finally {\n  if (-not $proc.HasExited) {\n    Stop-Process -Id $proc.Id -Force\
+        \ -ErrorAction SilentlyContinue\n  }\n}\n"
+  windows-desktop-launch-smoke:
+    name: Windows / Desktop launch smoke
+    needs: resolve-version
+    runs-on: windows-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+    - name: Download and extract the published Windows desktop zip
+      run: "$ErrorActionPreference = \"Stop\"\n$tag = \"${{ needs.resolve-version.outputs.tag }}\"\n$zipUrl\
+        \ = \"https://github.com/skyhook-io/radar/releases/download/$tag/radar-desktop_${tag}_windows_amd64.zip\"\
+        \n$zipPath = Join-Path $env:RUNNER_TEMP \"radar-desktop.zip\"\n$extractDir = Join-Path $env:RUNNER_TEMP\
+        \ \"radar-desktop\"\n\nInvoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing\nExpand-Archive\
+        \ -Path $zipPath -DestinationPath $extractDir -Force\n\n$exe = Join-Path $extractDir \"Radar.exe\"\
+        \nif (-not (Test-Path $exe)) {\n  throw \"Radar.exe not found in $zipUrl after extraction\"\n\
+        }\nAdd-Content -Path $env:GITHUB_ENV -Value \"RADAR_DESKTOP_EXE=$exe\"\n"
+    - name: --version reports the right release (before attempting a GUI launch)
+      run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
+        \ }}\"\n$exe = $env:RADAR_DESKTOP_EXE\n\n$out = & $exe --version 2>&1\nif ($LASTEXITCODE -ne 0)\
+        \ { throw \"Radar.exe --version exited $LASTEXITCODE : $out\" }\nif ($out -notmatch \"^radar-desktop\\\
+        s+(\\S+)\") {\n  throw \"Unexpected 'Radar.exe --version' output: $out\"\n}\n$got = $Matches[1]\n\
+        if ($got -ne $expected) {\n  throw \"Radar.exe --version reports $got but the latest published\
+        \ release is $expected\"\n}\nWrite-Host \"Radar.exe --version OK: $got\"\n"
+    - name: Launch the GUI, assert it survives startup and creates a window, then stop it
+      run: "$ErrorActionPreference = \"Stop\"\n$exe = $env:RADAR_DESKTOP_EXE\n$stdout = Join-Path $env:RUNNER_TEMP\
+        \ \"radar-desktop-stdout.log\"\n$stderr = Join-Path $env:RUNNER_TEMP \"radar-desktop-stderr.log\"\
+        \n\n# No -Wait: this is a GUI app with no natural exit. No kubeconfig is\n# provided on purpose\
+        \ \u2014 cmd/desktop/main.go shows that failing K8s\n# init surfaces in the UI instead of crashing\
+        \ the process, so this\n# is the expected, honest \"no cluster\" state for the desktop app too.\n\
+        $proc = Start-Process -FilePath $exe -PassThru `\n  -RedirectStandardOutput $stdout -RedirectStandardError\
+        \ $stderr\n\ntry {\n  # Bounded wait: give the WebView2-backed window time to come up,\n  # but\
+        \ never wait indefinitely.\n  $seconds = 20\n  $survived = $true\n  for ($i = 0; $i -lt $seconds;\
+        \ $i++) {\n    Start-Sleep -Seconds 1\n    if ($proc.HasExited) {\n      $survived = $false\n\
+        \      break\n    }\n  }\n\n  if (-not $survived) {\n    throw \"Radar.exe exited after $i s (code\
+        \ $($proc.ExitCode)) instead of staying up \u2014 stdout: $(Get-Content $stdout -Raw -ErrorAction\
+        \ SilentlyContinue) stderr: $(Get-Content $stderr -Raw -ErrorAction SilentlyContinue)\"\n  }\n\
+        \n  # Refresh the process handle's window info and check a real\n  # top-level window was created\
+        \ \u2014 stronger than \"the process\n  # exists\", weaker than \"the UI is correct\".\n  $proc.Refresh()\n\
+        \  if ($proc.MainWindowHandle -eq [IntPtr]::Zero) {\n    throw \"Radar.exe process is running\
+        \ after ${seconds}s but never created a top-level window (MainWindowHandle is zero) \u2014 \"\
+        \ + `\n          \"likely WebView2 Runtime missing/failing on this runner image, or a startup\
+        \ crash swallowed by the GUI subsystem. \" + `\n          \"stderr: $(Get-Content $stderr -Raw\
+        \ -ErrorAction SilentlyContinue)\"\n  }\n  Write-Host \"Radar.exe alive after ${seconds}s with\
+        \ window handle $($proc.MainWindowHandle) and title '$($proc.MainWindowTitle)'\"\n} finally {\n\
+        \  if (-not $proc.HasExited) {\n    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n\
+        \    Start-Sleep -Seconds 2\n    $stillThere = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue\n\
+        \    if ($stillThere) {\n      throw \"Radar.exe (PID $($proc.Id)) did not terminate within 2s\
+        \ of Stop-Process\"\n    }\n  }\n}\n"
+  cli-e2e:
+    needs: resolve-version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - scenario: smoke
+          specs: smoke
+        - scenario: resources
+          specs: resources
+        - scenario: topology
+          specs: topology
+        - scenario: timeline
+          specs: timeline
+        - scenario: logs
+          specs: logs
+        - scenario: diagnose
+          specs: diagnose
+    steps:
+    - name: Checkout this harness
+      uses: actions/checkout@v6
+    - name: Install kubectl-radar via the public quick-install script
+      run: curl -fsSL https://get.radarhq.io | sh
+    - name: Put the install location on PATH
+      run: "for dir in /usr/local/bin \"$HOME/.local/bin\"; do\n  if [ -x \"$dir/kubectl-radar\" ]; then\n\
+        \    echo \"$dir\" >> \"$GITHUB_PATH\"\n    break\n  fi\ndone\n"
+    - name: Install kind
+      uses: helm/kind-action@v1
+      with:
+        install_only: true
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: dist/cli-e2e/package-lock.json
+    - name: Cache Playwright browsers
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-cli-e2e-${{ runner.os }}-${{ hashFiles('dist/cli-e2e/package-lock.json') }}
+    - name: Run CLI e2e
+      env:
+        RADAR_EXPECTED_VERSION: ${{ needs.resolve-version.outputs.version }}
+        CLUSTER: dist-e2e-${{ matrix.scenario }}
+        SCENARIO: ${{ matrix.scenario }}
+        SPECS: ${{ matrix.specs }}
+      working-directory: dist/cli-e2e
+      run: ./run.sh all
+    - name: Collect diagnostics
+      if: always()
+      working-directory: dist/cli-e2e
+      env:
+        CLUSTER: dist-e2e-${{ matrix.scenario }}
+      run: ./run.sh logs > diagnostics.txt 2>&1 || true
+    - name: Upload Playwright report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: cli-e2e-${{ matrix.scenario }}
+        path: 'cli-e2e/playwright-report/
+
+          cli-e2e/test-results/
+
+          cli-e2e/visual/
+
+          cli-e2e/diagnostics.txt
+
+          '
+        retention-days: 7
+    - name: Tear down
+      if: always()
+      working-directory: dist/cli-e2e
+      env:
+        CLUSTER: dist-e2e-${{ matrix.scenario }}
+      run: ./run.sh down || true

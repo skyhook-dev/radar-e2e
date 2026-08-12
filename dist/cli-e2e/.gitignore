@@ -5,9 +5,3 @@ playwright-report/
 
 # Screenshots produced by a local run; CI ships them as artifacts.
 visual/
-gallery/
-
-dist/cli-e2e/node_modules/
-dist/cli-e2e/visual/
-dist/cli-e2e/test-results/
-dist/cli-e2e/playwright-report/
