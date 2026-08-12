@@ -115,8 +115,8 @@ jobs:
         \ --version >/dev/null\n"
     - name: A pre-existing non-symlink 'radar' file must be left untouched
       run: "sudo rm -f /usr/local/bin/radar\nprintf '#!/bin/sh\\necho not-ours\\n' | sudo tee /usr/local/bin/radar\
-        \ >/dev/null\nsudo chmod +x /usr/local/bin/radar\n\nINSTALL_OUTPUT=$(curl -fsSL https://get.radarhq.io\
-        \ | sh)\n\nif [ -L /usr/local/bin/radar ]; then\n  echo \"::error::install.sh replaced a pre-existing\
+        \ >/dev/null\nsudo chmod +x /usr/local/bin/radar\n\n# install.sh prints the \"not a symlink\" notice on stderr, so a\n# stdout-only capture makes a warning that did fire look like one\n# that never did.\nINSTALL_OUTPUT=$(curl -fsSL https://get.radarhq.io\
+        \ | sh 2>&1)\n\nif [ -L /usr/local/bin/radar ]; then\n  echo \"::error::install.sh replaced a pre-existing\
         \ non-symlink /usr/local/bin/radar with a symlink. It must refuse to clobber a file it doesn't\
         \ own \u2014 see install.sh's [ -e ... ] && [ ! -L ... ] guard.\"\n  exit 1\nfi\nif ! echo \"\
         $INSTALL_OUTPUT\" | grep -q \"already exists and is not a symlink\"; then\n  echo \"::error::install.sh\
@@ -173,7 +173,9 @@ jobs:
       image: ${{ matrix.image }}
     steps:
     - name: Install curl
-      run: dnf install -y -q curl
+      # rockylinux:9 ships curl-minimal, which conflicts with the full curl
+      # package, so a plain install aborts. --allowerasing lets dnf swap them.
+      run: command -v curl >/dev/null || dnf install -y -q --allowerasing curl
     - name: Download and install the published .rpm
       run: "TAG=\"${{ needs.resolve-version.outputs.tag }}\"\ncurl -fsSL -o /tmp/radar-desktop.rpm \\\n\
         \  \"https://github.com/skyhook-io/radar/releases/download/${TAG}/radar-desktop_${TAG}_linux_amd64.rpm\"\
@@ -247,11 +249,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
     - name: brew tap + install radar
-      run: 'brew tap skyhook-io/tap
-
-        brew install radar
-
-        '
+      # Full tap path, exactly as the README tells users to install it. A bare
+      # `brew install radar` resolves through tap search instead, and Homebrew
+      # refuses to load a formula found that way from an untrusted third-party
+      # tap. That is a property of how the command names the formula, not of the
+      # formula itself, so asserting on the bare form tests the wrong thing.
+      run: |
+        brew tap skyhook-io/tap
+        brew install skyhook-io/tap/radar
     - name: Assert installed CLI version matches latest release
       run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
         \ '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\nif [ \"${INSTALLED}\"\
@@ -275,11 +280,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
     - name: brew tap + install --cask radar-desktop
-      run: 'brew tap skyhook-io/tap
-
-        brew install --cask radar-desktop
-
-        '
+      # Full tap path - see the note on the CLI job above.
+      run: |
+        brew tap skyhook-io/tap
+        brew install --cask skyhook-io/tap/radar-desktop
     - name: Assert installed cask version matches latest release
       run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(brew list --cask --versions\
         \ radar-desktop | awk '{print $2}')\"\necho \"installed: ${INSTALLED}  latest release: ${LATEST}\"\
@@ -332,11 +336,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
     - name: brew tap + install radar
-      run: 'brew tap skyhook-io/tap
-
-        brew install radar
-
-        '
+      # Full tap path, exactly as the README tells users to install it. A bare
+      # `brew install radar` resolves through tap search instead, and Homebrew
+      # refuses to load a formula found that way from an untrusted third-party
+      # tap. That is a property of how the command names the formula, not of the
+      # formula itself, so asserting on the bare form tests the wrong thing.
+      run: |
+        brew tap skyhook-io/tap
+        brew install skyhook-io/tap/radar
     - name: Assert installed CLI version matches latest release
       run: "LATEST=\"${{ needs.resolve-version.outputs.version }}\"\nINSTALLED=\"$(radar --version | awk\
         \ '{print $2}')\"\nif [ \"${INSTALLED}\" != \"${LATEST}\" ]; then\n  echo \"::error::Launch smoke\
@@ -464,27 +471,48 @@ jobs:
         shell: ${{ matrix.shell }}
     steps:
     - name: Run install.ps1 (first install)
-      run: "$ErrorActionPreference = \"Stop\"\n# Matches the exact one-liner published in the repo's README\
-        \ / release\n# notes \u2014 this is what a real user runs, not a checked-out copy.\nirm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1\
-        \ | iex\n"
-    - name: Assert binary installed where the script claims, and on PATH
-      run: "$ErrorActionPreference = \"Stop\"\n$installDir = \"$env:LOCALAPPDATA\\radar\"\n$kubectlRadar\
-        \ = Join-Path $installDir \"kubectl-radar.exe\"\n$radarAlias = Join-Path $installDir \"radar.exe\"\
-        \n\nif (-not (Test-Path $kubectlRadar)) {\n  throw \"install.ps1 did not place kubectl-radar.exe\
-        \ at $kubectlRadar\"\n}\nif (-not (Test-Path $radarAlias)) {\n  throw \"install.ps1 did not create\
-        \ the radar.exe convenience alias at $radarAlias\"\n}\n\n# Current-process PATH: install.ps1 sets\
-        \ $env:Path itself (line 94),\n# so this must already work in THIS step without a new shell.\n\
-        $cmd = Get-Command kubectl-radar -ErrorAction SilentlyContinue\nif (-not $cmd) {\n  throw \"kubectl-radar\
-        \ not resolvable via PATH in the same session install.ps1 ran in \u2014 \" + `\n        \"expected\
-        \ `$env:Path to already include $installDir\"\n}\nif ($cmd.Source -ne $kubectlRadar) {\n  throw\
-        \ \"PATH resolves kubectl-radar to $($cmd.Source), expected $kubectlRadar (stale copy earlier\
-        \ on PATH?)\"\n}\n\n# Persistent User PATH (registry): this is what a genuinely new\n# terminal\
-        \ (\"restart your terminal\", per the script's own final\n# message) would see. Reading it via\
-        \ [Environment]::GetEnvironmentVariable\n# goes straight to the registry, unlike $env:Path, so\
-        \ this is a real\n# check of persistence rather than of this-process state.\n$persistedPath =\
-        \ [Environment]::GetEnvironmentVariable(\"Path\", \"User\")\n$entries = $persistedPath -split\
-        \ \";\"\nif (-not ($entries -contains $installDir)) {\n  throw \"Persistent User PATH does not\
-        \ contain $installDir after install.ps1. Got: $persistedPath\"\n}\n"
+      run: |
+        $ErrorActionPreference = "Stop"
+        # Matches the exact one-liner published in the repo's README / release
+        # notes - this is what a real user runs, not a checked-out copy.
+        irm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1 | iex
+
+        # install.ps1 sets $env:Path itself, not just the registry, so the
+        # shorthand has to resolve without opening a new shell. This can only be
+        # checked HERE: every workflow `run:` block is a separate process, so a
+        # later step would be testing a fresh environment, not the installer.
+        $installDir = "$env:LOCALAPPDATA\radar"
+        $cmd = Get-Command kubectl-radar -ErrorAction SilentlyContinue
+        if (-not $cmd) {
+          throw "kubectl-radar did not resolve via PATH in the same session install.ps1 ran in - expected `$env:Path to already include $installDir"
+        }
+        if ($cmd.Source -ne (Join-Path $installDir "kubectl-radar.exe")) {
+          throw "PATH resolves kubectl-radar to $($cmd.Source), expected $installDir\kubectl-radar.exe (stale copy earlier on PATH?)"
+        }
+    - name: Assert binary installed where the script claims, and persisted on PATH
+      run: |
+        $ErrorActionPreference = "Stop"
+        $installDir = "$env:LOCALAPPDATA\radar"
+        $kubectlRadar = Join-Path $installDir "kubectl-radar.exe"
+        $radarAlias = Join-Path $installDir "radar.exe"
+
+        if (-not (Test-Path $kubectlRadar)) {
+          throw "install.ps1 did not place kubectl-radar.exe at $kubectlRadar"
+        }
+        if (-not (Test-Path $radarAlias)) {
+          throw "install.ps1 did not create the radar.exe convenience alias at $radarAlias"
+        }
+
+        # Persistent User PATH (registry): what a genuinely new terminal
+        # ("restart your terminal", per the script's own closing message) would
+        # see. This process inherited its environment from before the install,
+        # so reading the registry directly is the only honest check available
+        # here - $env:Path in this step proves nothing either way.
+        $persistedPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $entries = $persistedPath -split ";"
+        if (-not ($entries -contains $installDir)) {
+          throw "Persistent User PATH does not contain $installDir after install.ps1. Got: $persistedPath"
+        }
     - name: Assert reported version matches the latest published release
       run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
         \ }}\"\n$exe = Join-Path \"$env:LOCALAPPDATA\\radar\" \"kubectl-radar.exe\"\n\n$out = & $exe --version\
@@ -589,13 +617,29 @@ jobs:
         \ -Path $zipPath -DestinationPath $extractDir -Force\n\n$exe = Join-Path $extractDir \"Radar.exe\"\
         \nif (-not (Test-Path $exe)) {\n  throw \"Radar.exe not found in $zipUrl after extraction\"\n\
         }\nAdd-Content -Path $env:GITHUB_ENV -Value \"RADAR_DESKTOP_EXE=$exe\"\n"
-    - name: --version reports the right release (before attempting a GUI launch)
-      run: "$ErrorActionPreference = \"Stop\"\n$expected = \"${{ needs.resolve-version.outputs.version\
-        \ }}\"\n$exe = $env:RADAR_DESKTOP_EXE\n\n$out = & $exe --version 2>&1\nif ($LASTEXITCODE -ne 0)\
-        \ { throw \"Radar.exe --version exited $LASTEXITCODE : $out\" }\nif ($out -notmatch \"^radar-desktop\\\
-        s+(\\S+)\") {\n  throw \"Unexpected 'Radar.exe --version' output: $out\"\n}\n$got = $Matches[1]\n\
-        if ($got -ne $expected) {\n  throw \"Radar.exe --version reports $got but the latest published\
-        \ release is $expected\"\n}\nWrite-Host \"Radar.exe --version OK: $got\"\n"
+    - name: Assert the shipped Radar.exe carries the right version metadata
+      run: |
+        $ErrorActionPreference = "Stop"
+        $expected = "${{ needs.resolve-version.outputs.version }}"
+        $exe = $env:RADAR_DESKTOP_EXE
+
+        # Radar.exe is a GUI-subsystem binary: launched from a console it
+        # detaches immediately, writes nothing to stdout and leaves
+        # $LASTEXITCODE unset, so `& $exe --version` cannot be read here no
+        # matter what the flag does. The Windows-native equivalent is the
+        # version resource compiled into the executable, which is also what
+        # Explorer, winget and the installer UIs display to a user.
+        $info = (Get-Item $exe).VersionInfo
+        $got = $info.ProductVersion
+        if (-not $got) { $got = $info.FileVersion }
+        Write-Host "Radar.exe version resource: ProductVersion='$($info.ProductVersion)' FileVersion='$($info.FileVersion)'"
+
+        if (-not $got) {
+          throw "Radar.exe carries no version resource at all - Explorer and winget will both show it as unversioned. Expected $expected."
+        }
+        if ($got.TrimStart("v") -ne $expected) {
+          throw "Radar.exe version resource reports '$got' but the latest published release is $expected - the Windows build is not stamping the release version into the executable."
+        }
     - name: Launch the GUI, assert it survives startup and creates a window, then stop it
       run: "$ErrorActionPreference = \"Stop\"\n$exe = $env:RADAR_DESKTOP_EXE\n$stdout = Join-Path $env:RUNNER_TEMP\
         \ \"radar-desktop-stdout.log\"\n$stderr = Join-Path $env:RUNNER_TEMP \"radar-desktop-stderr.log\"\

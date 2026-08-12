@@ -307,7 +307,12 @@ run_tests() {
   npx playwright install --with-deps chromium >/dev/null 2>&1 || npx playwright install chromium
   # Screenshots land in visual/<scenario>/ so the gallery can group them by
   # scenario and pair each surface against the other variant's copy.
-  local visual_dir="$REPO_ROOT/visual/${SCENARIO:-${SPECS:-all}}"
+  # In CI SCENARIO is a single name, but locally SPECS is often several specs at
+  # once ("smoke helm"), and a directory with a space in it survives here only to
+  # break the artifact upload and the gallery's path parsing later.
+  local visual_name="${SCENARIO:-${SPECS:-all}}"
+  visual_name="$(printf '%s' "$visual_name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
+  local visual_dir="$REPO_ROOT/visual/${visual_name:-all}"
   rm -rf "$visual_dir"; mkdir -p "$visual_dir"
 
   # shellcheck disable=SC2086 - SPECS is a deliberate word-split filter list.
