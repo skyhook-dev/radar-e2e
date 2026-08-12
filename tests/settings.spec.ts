@@ -213,18 +213,25 @@ test('the self-hosting page reflects the license this deployment actually runs o
   ).toBe(true);
   expect(license.expires_at, '/api/config reports no license expiry').toBeTruthy();
 
-  await expect(
-    licenseCard,
-    `license is issued to "${license.org}" per /api/config but the card doesn't show it`,
-  ).toContainText(license.org);
-  await expect(
-    licenseCard,
-    `license caps this deployment at ${license.max_clusters} clusters per /api/config but the card doesn't say so`,
-  ).toContainText(`up to ${license.max_clusters} clusters`);
+  // Soft from here: org, cluster cap, status and expiry are four independent
+  // facts the card renders from the same payload. A hard assertion on the
+  // first stops the test, so a card that has drifted from /api/config in
+  // several places reports as one problem and takes several runs to unpick.
+  // The card being visible above stays hard - none of this means anything if
+  // it never rendered.
+  await expect
+    .soft(licenseCard, `license is issued to "${license.org}" per /api/config but the card doesn't show it`)
+    .toContainText(license.org);
+  await expect
+    .soft(
+      licenseCard,
+      `license caps this deployment at ${license.max_clusters} clusters per /api/config but the card doesn't say so`,
+    )
+    .toContainText(`up to ${license.max_clusters} clusters`);
   if (license.status === 'trial') {
-    await expect(licenseCard, 'license status is "trial" but the card headline does not say Trial').toContainText(
-      'Trial',
-    );
+    await expect
+      .soft(licenseCard, 'license status is "trial" but the card headline does not say Trial')
+      .toContainText('Trial');
   }
   {
     // Same formatting the page itself uses (SelfHosting.tsx's fmtDate:
@@ -238,10 +245,12 @@ test('the self-hosting page reflects the license this deployment actually runs o
       day: 'numeric',
       year: 'numeric',
     });
-    await expect(
-      licenseCard,
-      `license expires ${license.expires_at} per /api/config but the card doesn't show "${formatted}"`,
-    ).toContainText(formatted);
+    await expect
+      .soft(
+        licenseCard,
+        `license expires ${license.expires_at} per /api/config but the card doesn't show "${formatted}"`,
+      )
+      .toContainText(formatted);
   }
 
   await captureSurface(page, testInfo, 'self-hosting-license');

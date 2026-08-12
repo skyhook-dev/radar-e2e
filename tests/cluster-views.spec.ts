@@ -190,18 +190,22 @@ test.describe('cluster-scoped views (radar embedded via the tunnel)', () => {
       group,
       'no topology group for the radar-hub namespace - the graph is not showing real cluster data',
     ).toBeVisible();
-    await expect(group, 'Pod count on the radar-hub group does not match kubectl').toContainText(
-      pluralPhrase(radarHub.pods, 'Pod'),
-    );
-    await expect(group, 'Service count on the radar-hub group does not match kubectl').toContainText(
-      pluralPhrase(radarHub.services, 'Service'),
-    );
-    await expect(group, 'Deployment count on the radar-hub group does not match kubectl').toContainText(
-      pluralPhrase(radarHub.deployments, 'Deployment'),
-    );
-    await expect(group, 'StatefulSet count on the radar-hub group does not match kubectl').toContainText(
-      pluralPhrase(radarHub.statefulsets, 'StatefulSet'),
-    );
+    // Soft: these four counts are independent, and a hard assertion on the
+    // first one hides the other three. If the graph is wrong about Pods it is
+    // worth knowing in the same run whether it is also wrong about Services -
+    // one report of "all four counts are stale" is a different diagnosis from
+    // "the Pod count is off". The group being visible above stays hard,
+    // because none of these mean anything if the graph never rendered.
+    for (const [label, actual] of [
+      ['Pod', radarHub.pods],
+      ['Service', radarHub.services],
+      ['Deployment', radarHub.deployments],
+      ['StatefulSet', radarHub.statefulsets],
+    ] as const) {
+      await expect
+        .soft(group, `${label} count on the radar-hub group does not match kubectl`)
+        .toContainText(pluralPhrase(actual, label));
+    }
 
     await captureSurface(page, testInfo, 'topology-loaded');
     await testInfo.attach('topology-console-errors.json', {
