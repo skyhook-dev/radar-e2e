@@ -73,6 +73,10 @@ function collect(root) {
  */
 function collectVideos(root) {
   const videos = [];
+  // Every test the reports mention, recording or not. The gallery is supposed
+  // to be the thing someone reads instead of the run log, and a page of
+  // screenshots that never says which tests failed is not that.
+  const outcomes = [];
 
   /** Walk the JSON report's nested suites and yield every test result. */
   const eachTest = (suite, trail, out) => {
@@ -85,7 +89,15 @@ function collectVideos(root) {
           out.push({
             title: [...here, spec.title].filter(Boolean).join(' > '),
             status: r.status,
+            expected: t.expectedStatus,
             duration: r.duration,
+            // First line only. Playwright errors carry a full stack and an
+            // ANSI-coloured code frame; the first line is the assertion, which
+            // is the part that says what actually went wrong.
+            error: (r.error?.message ?? '')
+              .replace(/\[[0-9;]*m/g, '')
+              .split('\n')[0]
+              .slice(0, 300),
             videoPaths: (r.attachments ?? [])
               .filter((a) => a.name === 'video' && a.path)
               .map((a) => a.path.replace(/\\/g, '/')),
@@ -113,8 +125,6 @@ function collectVideos(root) {
       const file = path.join(resultsDir, dir.name, 'video.webm');
       if (fs.existsSync(file)) byTail.set(`${dir.name}/video.webm`, { file, dir: dir.name });
     }
-    if (!byTail.size) continue;
-
     const claimed = new Set();
     const reportPath = path.join(resultsDir, 'results.json');
     if (fs.existsSync(reportPath)) {
@@ -123,6 +133,14 @@ function collectVideos(root) {
         const tests = [];
         for (const s of report.suites ?? []) eachTest(s, [], tests);
         for (const t of tests) {
+          outcomes.push({
+            variant,
+            scenario,
+            title: t.title,
+            status: t.status,
+            expected: t.expected,
+            error: t.error,
+          });
           for (const p of t.videoPaths) {
             const tail = p.split('/').slice(-2).join('/');
             const hit = byTail.get(tail);
@@ -135,6 +153,8 @@ function collectVideos(root) {
         /* a malformed report must not cost us the recordings themselves */
       }
     }
+
+    if (!byTail.size) continue;
 
     // Anything the report did not account for (including the shared sign-in
     // step, which is its own project) still belongs in the review.
@@ -150,7 +170,7 @@ function collectVideos(root) {
       });
     }
   }
-  return videos;
+  return { videos, outcomes };
 }
 
 /** Console-error attachments a spec wrote, keyed by scenario. */
@@ -194,7 +214,7 @@ const consoleErrors = collectConsoleErrors(inputRoot);
 const videosByScenario = new Map();
 let videoBytes = 0;
 let sourceBytes = 0;
-const rawVideos = collectVideos(inputRoot);
+const { videos: rawVideos, outcomes } = collectVideos(inputRoot);
 if (rawVideos.length) fs.mkdirSync(path.join(outDir, 'video'), { recursive: true });
 
 // Playwright records at a fixed 25fps, which is far more than a UI walkthrough
@@ -323,6 +343,66 @@ function pane(shot, alt) {
     `<img loading="lazy" src="${light}" data-light="${light}" data-dark="${dark}" alt="${esc(alt)}"></a>${noDark}`;
 }
 
+// Outcomes grouped by scenario, so each section can say what happened rather
+// than leaving a reviewer to infer it from which screenshots exist.
+const outcomesByScenario = new Map();
+for (const o of outcomes) {
+  const list = outcomesByScenario.get(o.scenario) ?? [];
+  list.push(o);
+  outcomesByScenario.set(o.scenario, list);
+}
+
+/** A test counts as failed when its result is not what the spec expected. */
+const isFailure = (o) => o.status !== (o.expected ?? 'passed') && o.status !== 'skipped';
+
+/** Every scenario with at least one unexpected result, for the run-wide summary. */
+const failingScenarios = [...outcomesByScenario.entries()]
+  .filter(([, list]) => list.some(isFailure))
+  .map(([scenario, list]) => ({
+    scenario,
+    variants: [...new Set(list.filter(isFailure).map((o) => o.variant))].sort(),
+  }));
+
+/**
+ * What happened in one scenario, per variant, naming the failures.
+ *
+ * A test whose spec pinned it with test.fail() and which then passed shows up
+ * here too: Playwright calls that a failure, and it is the signal that a known
+ * defect got fixed and the pin is now stale.
+ */
+function outcomeBanner(scenario) {
+  const list = outcomesByScenario.get(scenario);
+  if (!list?.length) return '';
+  const rows = ['main', 'published']
+    .map((variant) => {
+      const mine = list.filter((o) => o.variant === variant);
+      if (!mine.length) return '';
+      const bad = mine.filter(isFailure);
+      const label = variant === 'main' ? 'built from main' : 'published release';
+      if (!bad.length) return `<div><strong>${label}:</strong> ${mine.length} passed</div>`;
+      return (
+        `<div><strong>${label}:</strong> ${mine.length - bad.length} passed, ${bad.length} failed` +
+        bad
+          .map(
+            (o) =>
+              `<div class="failrow"><span class="failtitle">${esc(o.title)}</span>` +
+              (o.expected === 'failed' && o.status === 'passed'
+                ? `<span class="failwhy">passed while pinned as a known defect - the pin is stale and should be removed</span>`
+                : o.error
+                  ? `<span class="failwhy">${esc(o.error)}</span>`
+                  : `<span class="failwhy">${esc(o.status)}</span>`) +
+              `</div>`,
+          )
+          .join('') +
+        `</div>`
+      );
+    })
+    .filter(Boolean)
+    .join('');
+  const anyBad = list.some(isFailure);
+  return `    <div class="${anyBad ? 'outcome bad' : 'outcome'}">${rows}</div>\n`;
+}
+
 /**
  * The session recordings for one scenario, grouped by test.
  *
@@ -405,6 +485,13 @@ const html = `<!doctype html>
   .themes button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
   .themes button.on { background: color-mix(in srgb, Canvas 80%, CanvasText); font-weight: 600; }
   .nodark { font-size: 11px; color: var(--muted); }
+  .outcome { border: 1px solid var(--line); border-left: 3px solid #3a9; border-radius: 8px;
+             padding: 10px 14px; margin: 12px 0; font-size: 13px; }
+  .outcome.bad { border-left-color: #d9534f; background: color-mix(in srgb, Canvas 95%, #d9534f); }
+  .outcome > div + div { margin-top: 6px; }
+  .failrow { display: flex; gap: 10px; align-items: baseline; margin: 5px 0 0 14px; flex-wrap: wrap; }
+  .failtitle { font-weight: 600; }
+  .failwhy { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .rec { border-top: 1px solid var(--line); }
   .rec:first-of-type { border-top: 0; }
   .rectitle { padding: 9px 14px; font-size: 13px; }
@@ -446,6 +533,22 @@ const html = `<!doctype html>
     one side only usually means the feature does not exist in the other - which is itself the thing to look at.
     Click any image to open it full size.
   </p>
+${
+  failingScenarios.length
+    ? `  <div class="outcome bad" style="margin-bottom:20px">
+    <strong>${failingScenarios.length} scenario${failingScenarios.length === 1 ? '' : 's'} did not come out clean.</strong>
+    Each is listed under its own heading below with the failing test and the reason.
+    A scenario failing on <em>published only</em> is normally a feature that exists in main and has not shipped yet.
+${failingScenarios
+  .map(
+    (f) =>
+      `    <div class="failrow"><span class="failtitle"><a href="#${esc(f.scenario)}">${esc(f.scenario)}</a></span>` +
+      `<span class="failwhy">${f.variants.join(' and ')}</span></div>`,
+  )
+  .join('\n')}
+  </div>`
+    : '  <div class="outcome">Every test passed on both variants.</div>'
+}
 ${scenarios
   .map((scenario) => {
     const surfaces = [...(byScenario.get(scenario)?.entries() ?? [])].sort(([a], [b]) =>
@@ -460,7 +563,7 @@ ${scenarios
     return `  <section id="${esc(scenario)}">
     <h2>${esc(title(scenario))}</h2>
     <p class="hint">${counts.join(' &middot; ') || 'nothing captured'}${surfaces.length ? '' : ' - this scenario takes no screenshots'}</p>
-${errs ? `    <div class="warn"><strong>Console errors during this scenario:</strong><br><code>${errs.slice(0, 6).map(esc).join('<br>')}</code></div>\n` : ''}${surfaces
+${outcomeBanner(scenario)}${errs ? `    <div class="warn"><strong>Console errors during this scenario:</strong><br><code>${errs.slice(0, 6).map(esc).join('<br>')}</code></div>\n` : ''}${surfaces
       .map(
         ([surface, v]) => `    <div class="surface">
       <h3>${esc(title(surface))} <code style="color:var(--muted)">${esc(surface)}</code></h3>
