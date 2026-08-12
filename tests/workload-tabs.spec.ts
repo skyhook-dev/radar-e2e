@@ -4,6 +4,7 @@ import {
   authStatePath,
   captureSurface,
   clusterId,
+  walkTabs,
   watchConsoleErrors,
 } from './helpers';
 
@@ -85,67 +86,60 @@ async function checkTab(page: Page, label: string, testInfo: Parameters<typeof c
   return rendered;
 }
 
-test('every tab the workload view offers opens and renders', async ({ page }, testInfo) => {
-  const consoleErrors = watchConsoleErrors(page);
-  await page.goto('/');
-  await assertClusterConnected(page);
-  await openWorkload(page, HEALTHY);
+// Each fixture kind renders a DIFFERENT tab set - Reachability only appears for
+// kinds the product can diagnose, Logs only where there is output to stream - so
+// walking a Deployment proves nothing about the others. These are the kinds the
+// shared fixture provides.
+const KINDS: { path: string; name: string; what: string }[] = [
+  { path: 'deployments', name: HEALTHY, what: 'a healthy Deployment' },
+  { path: 'deployments', name: 'broken-image', what: 'a Deployment stuck in ImagePullBackOff' },
+  { path: 'deployments', name: 'unschedulable', what: 'a Deployment whose pod cannot be scheduled' },
+  { path: 'statefulsets', name: 'ledger', what: 'a StatefulSet with a volume claim' },
+  { path: 'daemonsets', name: 'node-probe', what: 'a DaemonSet' },
+  { path: 'jobs', name: 'migrate-once', what: 'a completed Job' },
+  { path: 'cronjobs', name: 'nightly-report', what: 'a CronJob that has not run yet' },
+  { path: 'services', name: HEALTHY, what: 'a Service with endpoints' },
+  { path: 'services', name: 'orphaned', what: 'a Service whose selector matches nothing' },
+];
 
-  // Read the tabs the product actually offers rather than assuming a list:
-  // if a tab is added, this picks it up and checks it without an edit here.
-  const offered = (await page.getByRole('tab').allTextContents())
-    .map((t) => t.trim())
-    .filter(Boolean);
-  expect(offered.length, 'the workload view offered no tabs at all').toBeGreaterThan(0);
-  testInfo.annotations.push({ type: 'tabs offered', description: offered.join(', ') });
+for (const kind of KINDS) {
+  test(`every tab opens and renders for ${kind.what}`, async ({ page }, testInfo) => {
+    const consoleErrors = watchConsoleErrors(page);
+    await page.goto('/');
+    await assertClusterConnected(page);
 
-  for (const label of ALWAYS_PRESENT) {
-    expect
-      .soft(
-        offered.some((t) => t.toLowerCase().startsWith(label.toLowerCase())),
-        `the workload view did not offer a ${label} tab - it is not conditional on anything installed in the cluster`,
-      )
-      .toBe(true);
-  }
+    await page.goto(`/c/${clusterId}/workload/${kind.path}/${NS}/${kind.name}`);
 
-  const renderedByTab = new Map<string, string>();
-  for (const label of offered) {
-    // Every offered tab gets opened, including ones added since this was
-    // written.
-    //
-    // The badge is concatenated with NO separator - the Timeline tab reads
-    // "Timeline32" once the fixture has generated 32 events - so the label has
-    // to be cut at the first non-letter rather than split on whitespace. This
-    // passed locally where the cluster was quiet and failed in CI where it was
-    // not, which is the kind of difference a badge count makes.
-    const name = (label.match(/^[A-Za-z][A-Za-z ]*/)?.[0] ?? label).trim();
-    renderedByTab.set(name, await checkTab(page, name, testInfo));
-  }
+    // A kind whose detail view does not open at all is worth failing loudly
+    // for - the tab walk below could otherwise report "no tabs" and read like
+    // a missing feature rather than a broken route.
+    await expect(
+      page.getByRole('heading', { name: new RegExp(kind.name, 'i') }).first(),
+      `the detail view for ${kind.what} (${kind.path}/${kind.name}) never rendered its heading`,
+    ).toBeVisible({ timeout: 30_000 });
 
-  // Selecting a tab must change what is on screen. This is the check that does
-  // not depend on knowing any tab's copy: if two tabs render byte-identical
-  // text, one of them is a label that does nothing, which looks completely
-  // healthy in a screenshot and in an aria-selected assertion.
-  const seen = new Map<string, string>();
-  for (const [name, text] of renderedByTab) {
-    const twin = seen.get(text);
-    expect
-      .soft(twin, `the ${name} tab renders exactly the same content as the ${twin} tab - selecting it changes nothing`)
-      .toBeUndefined();
-    seen.set(text, name);
-    testInfo.annotations.push({ type: `tab:${name}`, description: `${text.length} chars rendered` });
-  }
+    const { offered } = await walkTabs(page, testInfo, `${kind.path}-${kind.name}`);
 
-  // The gallery surfaces these per scenario, so a tab that renders but throws
-  // in the console still gets reported rather than passing silently.
-  const errors = consoleErrors();
-  if (errors.length) {
-    await testInfo.attach('workload-tabs-console-errors.json', {
-      body: JSON.stringify(errors, null, 2),
-      contentType: 'application/json',
-    });
-  }
-});
+    // Overview and YAML are not conditional on anything installed, so their
+    // absence is a real gap rather than an unavailable data source.
+    for (const required of ['Overview', 'YAML']) {
+      expect
+        .soft(
+          offered.some((t) => t.toLowerCase() === required.toLowerCase()),
+          `${kind.what} offered no ${required} tab - it is unconditional, so this is missing rather than unavailable`,
+        )
+        .toBe(true);
+    }
+
+    const errors = consoleErrors();
+    if (errors.length) {
+      await testInfo.attach(`${kind.path}-${kind.name}-console-errors.json`, {
+        body: JSON.stringify(errors, null, 2),
+        contentType: 'application/json',
+      });
+    }
+  });
+}
 
 test('a workload with live output offers Logs, and the tab streams them', async ({ page }, testInfo) => {
   await page.goto('/');

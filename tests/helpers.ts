@@ -171,3 +171,92 @@ export function watchConsoleErrors(page: Page): () => string[] {
   page.on('pageerror', (e) => errors.push(`pageerror: ${String(e).slice(0, 300)}`));
   return () => errors;
 }
+
+/** Panel text that means the view failed rather than rendered. */
+const BROKEN_PANEL = /something went wrong|failed to load|unable to load|unexpected error/i;
+
+export type TabWalkResult = {
+  /** Tab label -> the page text it rendered, for callers wanting extra checks. */
+  rendered: Map<string, string>;
+  /** Labels in the order the product offered them. */
+  offered: string[];
+};
+
+/**
+ * Open every tab a view offers and check each one, without stopping at the
+ * first broken one.
+ *
+ * A scenario that opens one tab and moves on leaves the rest never exercised:
+ * a tab that throws, renders blank or spins forever fails nothing. Standing up
+ * a cluster costs minutes, so once a view is on screen the cheap thing is to
+ * walk all of it.
+ *
+ * Everything here is `expect.soft` on purpose. A hard assertion stops at the
+ * first bad tab, so you fix that one, re-run, and discover the next - the worst
+ * possible shape for a sweep. Soft assertions report every broken tab in one
+ * pass and still fail the test at the end.
+ *
+ * What each tab is held to, and why:
+ *   - it becomes selected, so a click that does nothing is not read as success
+ *   - it renders a non-trivial amount of text, so a blank panel is caught
+ *   - it is not showing an error or still loading
+ *   - it renders something DIFFERENT from every other tab, which catches a
+ *     label that does nothing without needing to know any tab's copy
+ *
+ * Tab labels carry their badge with no separator ("Timeline32"), so the label
+ * is cut at the first non-letter rather than split on whitespace.
+ */
+export async function walkTabs(
+  page: Page,
+  testInfo: Parameters<typeof captureSurface>[1],
+  surfacePrefix: string,
+): Promise<TabWalkResult> {
+  const tablist = page.getByRole('tablist').first();
+  await expect(tablist, `${surfacePrefix}: no tab strip appeared`).toBeVisible({ timeout: 30_000 });
+
+  const offered = (await page.getByRole('tab').allTextContents())
+    .map((t) => (t.trim().match(/^[A-Za-z][A-Za-z ]*/)?.[0] ?? '').trim())
+    .filter(Boolean);
+  expect(offered.length, `${surfacePrefix}: the view offered no tabs at all`).toBeGreaterThan(0);
+  testInfo.annotations.push({ type: `tabs:${surfacePrefix}`, description: offered.join(', ') });
+
+  const rendered = new Map<string, string>();
+  for (const label of offered) {
+    const tab = page.getByRole('tab', { name: new RegExp(`^\\s*${label}`, 'i') }).first();
+    await tab.click();
+
+    await expect
+      .soft(tab, `${surfacePrefix}: the ${label} tab did not become selected when clicked`)
+      .toHaveAttribute('aria-selected', 'true', { timeout: 15_000 });
+
+    const text = (await page.locator('body').innerText()).trim();
+    expect
+      .soft(text.length, `${surfacePrefix}: the ${label} tab rendered almost no text (${text.length} chars)`)
+      .toBeGreaterThan(200);
+
+    await expect
+      .soft(page.getByText(BROKEN_PANEL).first(), `${surfacePrefix}: the ${label} tab rendered an error state`)
+      .toBeHidden({ timeout: 10_000 });
+
+    await expect
+      .soft(
+        page.getByText(/^\s*(loading|fetching)/i).first(),
+        `${surfacePrefix}: the ${label} tab was still loading after 10s - a stuck spinner looks identical to a working tab in a screenshot`,
+      )
+      .toBeHidden({ timeout: 10_000 });
+
+    await captureSurface(page, testInfo, `${surfacePrefix}-tab-${label.toLowerCase().replace(/\s+/g, '-')}`);
+    rendered.set(label, text);
+  }
+
+  const byText = new Map<string, string>();
+  for (const [label, text] of rendered) {
+    const twin = byText.get(text);
+    expect
+      .soft(twin, `${surfacePrefix}: the ${label} tab renders exactly the same content as the ${twin} tab - selecting it changes nothing`)
+      .toBeUndefined();
+    byText.set(text, label);
+  }
+
+  return { rendered, offered };
+}
