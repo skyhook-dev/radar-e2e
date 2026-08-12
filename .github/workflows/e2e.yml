@@ -461,8 +461,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '.jobs[] | [.name, .conclusion] | @tsv' > jobs.tsv
+          # Retried: this call has failed on a transient api.github.com TLS
+          # error ("certificate is not valid for any names") and took the whole
+          # comparison down with it, which is a poor reason to lose the one
+          # summary that says whether main regressed against the release.
+          for attempt in 1 2 3 4 5; do
+            if gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+                 --jq '.jobs[] | [.name, .conclusion] | @tsv' > jobs.tsv; then
+              break
+            fi
+            echo "attempt $attempt failed, retrying in $((attempt * 5))s" >&2
+            sleep $((attempt * 5))
+          done
+          test -s jobs.tsv
 
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import re

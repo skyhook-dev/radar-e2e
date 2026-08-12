@@ -22,6 +22,13 @@ export default defineConfig({
   use: {
     baseURL: process.env.HUB_URL ?? 'http://localhost:18080',
     trace: 'retain-on-failure',
+    // A wider window and 2x pixel density. The suite is read by people looking
+    // at screenshots, and at 1x the product's small text - table cells, badges,
+    // helper copy - is exactly where it is hardest to tell a rendering problem
+    // from JPEG-ish mush. 1440 wide also stops the layout collapsing to its
+    // narrow breakpoint, which was hiding columns a desktop user would see.
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 2,
     // Capture a screenshot at the end of EVERY test, not just failures: the
     // suite doubles as a visual record of what the product looked like on this
     // commit, and the gallery job pairs each shot with the same test from the

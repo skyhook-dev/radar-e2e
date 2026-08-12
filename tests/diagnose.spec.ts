@@ -348,18 +348,13 @@ test('radar reports a Service with zero ready endpoints as unreachable and names
   });
 });
 
-// KNOWN ISSUE - see KNOWN-ISSUES.md. The Reachability tab is entirely absent
-// from the Hub's shipped frontend bundle right now (radar-hub-web pins
-// @skyhook-io/radar-app to 1.9.4; the feature first shipped in 1.9.6), so this
-// is written as the test SHOULD read once the Hub picks up a current
-// radar-app release, and is expected to fail at the very first UI assertion
-// until then.
+// This was pinned as a known issue: radar-hub-web shipped
+// @skyhook-io/radar-app 1.9.4, which predates the Reachability tab (1.9.6), so
+// the tab was absent from the Hub's bundle entirely. main now depends on
+// ^1.10.0 and the test passes, which is how the pin reported itself as stale -
+// `expected to fail, but passed`. Unpinned rather than deleted: it is a real
+// assertion about a real feature, and it now guards against the regression.
 test('the Reachability tab shows the same verdict a user would need to see', async ({ page }, testInfo) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 4: Hub is pinned to @skyhook-io/radar-app 1.9.4, which predates the Reachability tab (shipped in 1.9.6) - see KNOWN-ISSUES.md.',
-  );
-
   await page.goto('/');
   await assertClusterConnected(page);
 
@@ -374,5 +369,5 @@ test('the Reachability tab shows the same verdict a user would need to see', asy
 
   await expect(page.getByText(/^Reachable\b/)).toBeVisible({ timeout: 15_000 });
 
-  await captureSurface(page, testInfo, 'reachability-tab-missing');
+  await captureSurface(page, testInfo, 'reachability-tab');
 });
