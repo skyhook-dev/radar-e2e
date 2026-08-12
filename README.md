@@ -7,7 +7,7 @@ over the tunnel, and drives the web UI with Playwright. Everything is built from
 the current `main` of `radar-hub`, `radar-hub-web` and `radar`, so this watches
 the integration between the three codebases rather than the released artifacts.
 
-This repo holds only the harness — the code under test is checked out per run. It
+This repo holds only the harness - the code under test is checked out per run. It
 is public so that GitHub-hosted runner minutes are free; at 12 runs a day that is
 the difference between free and roughly $23/month.
 
@@ -37,39 +37,90 @@ export RADAR_HUB_LICENSE='<jwt>'
 ```
 
 The hub is reached at `http://localhost:18080` through a `kubectl port-forward`
-that `up` starts in the background — kind has no load balancer, and port-forward
+that `up` starts in the background - kind has no load balancer, and port-forward
 behaves the same on a laptop and on a CI runner.
 
 ## What it covers
 
-Each scenario runs as its own CI job with its own cluster, so they finish in the time of
-the slowest rather than the sum, and a wedged cluster cannot take the others down. Locally,
-`SPECS=timeline ./run.sh test` runs one of them.
+Each scenario runs as its own CI job with its own cluster, so they finish in the
+time of the slowest rather than the sum, and a wedged cluster cannot take the
+others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
 
-1. **Sign-in** (`smoke`) — break-glass admin reaches the authenticated app shell, and the org
-   the hub seeds from the license claim exists.
-2. **Timeline** (`timeline`) — the harness connects a real radar over the tunnel, then the
-   specs change a workload with kubectl and assert the change reaches both the hub's timeline
-   endpoint and the timeline page. The specs cause the change themselves; asserting over
-   pre-existing events would pass against a stale store.
-3. **Helm** (`helm`) — the releases the harness installed are listed on the Helm page with
-   their chart version and status. A different path from the timeline: release records live
-   in cluster Secrets behind their own RBAC. Expected releases come from `helm list` against
-   the same cluster, not from a fixture, so the assertion tracks reality.
+21 scenarios, roughly 52 tests:
 
-Not covered: hub-side timeline retention. `HUB_TIMELINE_BACKEND` is never set by the chart
-(and there is no `extraEnv`), so retention is off and `/c/{id}/api/timeline/*` delegates to
-the in-cluster radar. That is what the shipped chart does, so it is what this tests.
+| Scenario | What it proves |
+|---|---|
+| `smoke` | break-glass admin reaches the authenticated app shell, and the org the hub seeds from the license claim exists |
+| `timeline` | a workload change made with kubectl reaches both the hub's timeline endpoint and the timeline page |
+| `helm` / `helm-actions` | releases the harness installed are listed with chart version and status, and the write actions behave |
+| `resources` / `cluster-views` | workload browsing, and the cluster-scoped views radar serves through the tunnel |
+| `logs` / `exec` | log streaming and an interactive pod terminal, both proxied end to end |
+| `issues` / `alerts` / `diagnose` | problem detection surfaces real cluster state rather than an empty all-clear |
+| `certs-checks` | certificate and upgrade-impact checks read live cluster facts |
+| `applications-packages` / `gitops` | application and chart inventory, including CRD-backed GitOps resources |
+| `multi-cluster` | a second cluster connects and the fleet aggregates across both |
+| `onboarding` | the install wizard names this hub's real agent URL and mints a token the hub accepts |
+| `org-admin` / `settings` | org administration and settings pages |
+| `write-actions` | mutating actions are gated and applied correctly |
+| `mcp` | the MCP surface answers over the tunnel |
+| `known-issues` | pins defects found here so they turn red when fixed, not silently absorbed |
+
+Assertions are written against facts read from the cluster at the time of the
+test (`helm list`, `kubectl get`), not against fixtures, so they track reality
+instead of a snapshot taken when the test was written.
+
+Not covered: hub-side timeline retention. `HUB_TIMELINE_BACKEND` is never set by
+the chart (and there is no `extraEnv`), so retention is off and
+`/c/{id}/api/timeline/*` delegates to the in-cluster radar. That is what the
+shipped chart does, so it is what this tests. SSO/OIDC and billing need
+infrastructure this harness does not stand up.
+
+## Two variants, side by side
+
+Every scenario runs twice per cycle:
+
+- **main** - images built from the current `main` of all three repos.
+- **published** - the latest released chart and images from the public registry.
+
+The published leg deliberately does not wait for the build, so it starts
+immediately. Comparing the two answers the question that matters before a
+release: *is anything that works today going to break when this is published, and
+which of the things I fixed are not out yet?* A scenario that fails only on
+`published` is normally a feature that exists in `main` and has not shipped, and
+it goes green when main is published.
+
+## Visual review
+
+Specs capture screenshots at deliberate moments (not on a timer), each in light
+**and** dark theme, and the `gallery` job assembles every run into one
+self-contained `index.html`: main on the left, published on the right, one
+click to swap themes, console errors reported per scenario. Download the
+`visual-gallery` artifact and open `index.html` - no server, no network.
+
+## Distribution tests
+
+`.github/workflows/dist-e2e.yml` is a separate, daily suite that asks a
+different question: not "does main work" but "does what a user installs work".
+Nothing in it is built from source. 14 jobs across Linux, macOS and Windows
+cover Homebrew (formula and cask, both architectures), the `install.sh` and
+`install.ps1` one-liners, `.deb` and `.rpm` packages, Scoop, desktop-app code
+signing and launch, and a `cli-e2e` project that drives the published CLI
+against a real kind cluster.
+
+These fail in ways the browser suite cannot see: stale manifests, unsigned
+apps, unversioned binaries, installers that verify nothing they download.
+Findings that are real but not yet fixed are pinned - the job reports them as
+warnings and fails if the condition changes, so a fix cannot be absorbed
+silently. See `KNOWN-ISSUES.md`.
 
 ## CI
 
-`.github/workflows/e2e.yml` runs this every 2 hours (and on manual dispatch,
-which accepts a ref per repo). It differs from a local run in three ways: images are
-built by cache-aware build steps and `SKIP_BUILD=1` tells `run.sh` to skip its own
-build; the private `radar-hub-web` checkout uses a GitHub App token minted per job;
-and the Playwright report is uploaded on success as well as failure, because its
-attachments (matched timeline events, a full-page timeline screenshot) are the only
-evidence anyone can look at afterwards.
+`.github/workflows/e2e.yml` runs the browser suite every 2 hours and on manual
+dispatch. It differs from a local run in three ways: images are built by
+cache-aware build steps and `SKIP_BUILD=1` tells `run.sh` to skip its own build;
+the private `radar-hub-web` checkout uses a GitHub App token minted per job; and
+the Playwright report is uploaded on success as well as failure, because its
+attachments are the only evidence anyone can look at afterwards.
 
 Repository secrets it needs:
 
@@ -80,6 +131,8 @@ Repository secrets it needs:
 
 There is deliberately no admin-password secret: `run.sh` generates a throwaway
 credential per run, because Playwright traces record the login form being filled.
+
+The distribution suite needs no secrets at all - everything it touches is public.
 
 ## Notes
 
@@ -97,3 +150,5 @@ credential per run, because Playwright traces record the login form being filled
   goreleaser-built binaries in the build context.
 - Admin credentials come from `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD`; the
   break-glass admin is the only login that works without an identity provider.
+- macOS runners cannot run Docker (no nested virtualisation), so the macOS jobs
+  test installation and signing only; anything needing a cluster runs on Linux.
