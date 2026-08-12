@@ -202,6 +202,11 @@ test('rotating a cluster token drops the live tunnel and the old token no longer
     'the cluster reconnected while its agent was still using the rotated-away token - rotation did not actually invalidate it',
   ).toBe('disconnected');
 
+  // This test never navigated - it works entirely through the API - so the page
+  // is still blank. Without this the capture photographs about:blank, which
+  // also has no theme for the dark pass to detect.
+  await page.goto('/clusters');
+  await expect(page.getByText(/disconnected/i).first()).toBeVisible();
   await captureSurface(page, testInfo, 'clusters-list-token-rotated');
 
   // And the new token brings it back, which is what makes the rotation usable
