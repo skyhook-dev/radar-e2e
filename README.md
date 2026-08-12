@@ -46,7 +46,7 @@ Each scenario runs as its own CI job with its own cluster, so they finish in the
 time of the slowest rather than the sum, and a wedged cluster cannot take the
 others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
 
-21 scenarios, roughly 52 tests:
+22 scenarios, roughly 55 tests:
 
 | Scenario | What it proves |
 |---|---|
@@ -59,6 +59,7 @@ others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
 | `certs-checks` | certificate and upgrade-impact checks read live cluster facts |
 | `applications-packages` / `gitops` | application and chart inventory, including CRD-backed GitOps resources |
 | `multi-cluster` | a second cluster connects and the fleet aggregates across both |
+| `cluster-lifecycle` | an agent that stops is reported disconnected rather than stale-connected, comes back on its own, and a rotated token drops the live tunnel and stops working |
 | `onboarding` | the install wizard names this hub's real agent URL and mints a token the hub accepts |
 | `org-admin` / `settings` | org administration and settings pages |
 | `write-actions` | mutating actions are gated and applied correctly |
@@ -95,7 +96,7 @@ Specs capture screenshots at deliberate moments (not on a timer), each in light
 **and** dark theme, and the `gallery` job assembles every run into one
 self-contained `index.html`: main on the left, published on the right, one
 click to swap themes, console errors reported per scenario. Download the
-`visual-gallery` artifact and open `index.html` - no server, no network.
+`visual-review` artifact and open `index.html` - no server, no network.
 
 ## Distribution tests
 

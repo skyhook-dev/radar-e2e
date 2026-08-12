@@ -210,6 +210,8 @@ jobs:
             specs: applications-packages
           - scenario: multi-cluster
             specs: multi-cluster
+          - scenario: cluster-lifecycle
+            specs: cluster-lifecycle
           - scenario: write-actions
             specs: write-actions
           - scenario: exec
@@ -345,6 +347,8 @@ jobs:
             specs: applications-packages
           - scenario: multi-cluster
             specs: multi-cluster
+          - scenario: cluster-lifecycle
+            specs: cluster-lifecycle
           - scenario: write-actions
             specs: write-actions
           - scenario: exec

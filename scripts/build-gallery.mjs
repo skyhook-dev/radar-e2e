@@ -19,16 +19,29 @@ import path from 'node:path';
 
 const [, , inputRoot = 'artifacts', outDir = 'gallery', runUrl = ''] = process.argv;
 
-/** Find every screenshot under root, tagged with its variant and scenario. */
+/**
+ * Find every deliberately-captured screenshot under root, tagged with its
+ * variant and scenario.
+ *
+ * Only PNGs beneath a `visual/` directory count. The uploaded artifacts also
+ * contain the Playwright HTML report and `test-results/`, whose images are
+ * content-hash named (`<sha1>.png`) and per-run: they can never pair across
+ * variants, so collecting them turns most of the gallery into single-sided
+ * rows of unidentifiable screenshots and buries the surfaces a reviewer is
+ * here to look at.
+ */
 function collect(root) {
   const shots = [];
-  const walk = (dir, variant, scenario) => {
+  const walk = (dir, variant, scenario, inVisual) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         const m = entry.name.match(/^playwright-(main|published)-(.+)$/);
-        walk(full, m ? m[1] : variant, m ? m[2] : entry.name === 'visual' ? scenario : scenario ?? entry.name);
-      } else if (entry.name.endsWith('.png')) {
+        if (m) walk(full, m[1], m[2], false);
+        else if (entry.name === 'visual') walk(full, variant, scenario, true);
+        // Inside visual/, each subdirectory is a scenario.
+        else walk(full, variant, inVisual ? entry.name : scenario, inVisual);
+      } else if (inVisual && entry.name.endsWith('.png')) {
         const base = entry.name.replace(/\.png$/, '');
         const dark = base.endsWith('__dark');
         shots.push({
@@ -41,7 +54,9 @@ function collect(root) {
       }
     }
   };
-  walk(root, undefined, undefined);
+  // Pointing the script straight at a visual/ directory is the natural thing to
+  // do locally, and it must not come back empty.
+  walk(root, undefined, undefined, path.basename(path.resolve(root)) === 'visual');
   return shots;
 }
 
