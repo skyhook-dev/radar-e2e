@@ -225,6 +225,8 @@ jobs:
             specs: multi-cluster
           - scenario: cluster-lifecycle
             specs: cluster-lifecycle
+          - scenario: workload-tabs
+            specs: workload-tabs
           - scenario: write-actions
             specs: write-actions
           - scenario: exec
@@ -362,6 +364,8 @@ jobs:
             specs: multi-cluster
           - scenario: cluster-lifecycle
             specs: cluster-lifecycle
+          - scenario: workload-tabs
+            specs: workload-tabs
           - scenario: write-actions
             specs: write-actions
           - scenario: exec

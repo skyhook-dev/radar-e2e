@@ -1,0 +1,392 @@
+# A cluster with enough variety in it to be worth looking at.
+#
+# The suite used to seed one healthy two-replica Deployment, which meant every
+# scenario asserted against a cluster where nothing interesting was happening:
+# no failing workload, no pending pod, no config to inspect, one kind of
+# controller. Pages that exist to surface problems had no problems to surface,
+# so they were only ever tested in their empty state.
+#
+# Everything here is namespaced under e2e-fixtures so it cannot collide with
+# the per-spec fixtures specs create for themselves, and so a spec can assert
+# "this exact object appears with these exact attributes" against something it
+# did not have to build first.
+#
+# Images are registry.k8s.io/pause and busybox on purpose: tiny, already in the
+# kind node cache, and they do not phone home. The deliberately-broken
+# workloads use image tags that cannot resolve, which is what makes them fail
+# in a way the product should notice and report.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-fixtures
+  labels:
+    app.kubernetes.io/part-of: radar-e2e
+    environment: staging
+---
+# A healthy Deployment behind a Service, with config and secrets attached: the
+# ordinary case every resource view should render correctly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: e2e-fixtures
+  labels:
+    app.kubernetes.io/name: storefront
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: shop
+  annotations:
+    radar-e2e/purpose: "healthy deployment with config, secret and a service"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: storefront }
+  template:
+    metadata:
+      labels:
+        app: storefront
+        app.kubernetes.io/name: storefront
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 64Mi }
+          env:
+            - name: GREETING
+              valueFrom:
+                configMapKeyRef: { name: storefront-config, key: greeting }
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: storefront-secret, key: token }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/storefront
+      volumes:
+        - name: config
+          configMap: { name: storefront-config }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storefront-config
+  namespace: e2e-fixtures
+data:
+  greeting: "hello from the e2e fixture"
+  # Multi-line so the config viewer has something with structure to render.
+  settings.yaml: |
+    feature_flags:
+      new_checkout: true
+      recommendations: false
+    limits:
+      max_items: 50
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storefront-secret
+  namespace: e2e-fixtures
+type: Opaque
+stringData:
+  # Not a credential: a fixed string so a spec can assert the UI masks it.
+  token: "e2e-fixture-not-a-real-secret"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront
+  namespace: e2e-fixtures
+  labels: { app.kubernetes.io/name: storefront }
+spec:
+  selector: { app: storefront }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+# A Service whose selector matches nothing. Reachability and diagnosis views
+# should say so rather than report it as fine.
+apiVersion: v1
+kind: Service
+metadata:
+  name: orphaned
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/purpose: "selector matches no pods - endpoints must be empty"
+spec:
+  selector: { app: does-not-exist }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+# Fails to pull, permanently. Gives the issue, alert and diagnose surfaces a
+# real problem to find instead of an empty all-clear.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-image
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/purpose: "ImagePullBackOff - a real, live problem to detect"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: broken-image }
+  template:
+    metadata:
+      labels: { app: broken-image }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:this-tag-does-not-exist
+---
+# Unschedulable: requests more memory than any kind node has. Exercises the
+# Pending state, which looks different from a crash and should read differently.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unschedulable
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/purpose: "Pending forever - insufficient memory on any node"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: unschedulable }
+  template:
+    metadata:
+      labels: { app: unschedulable }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { memory: "512Gi" }
+---
+# A StatefulSet with a volume claim, so workload views are not only ever
+# exercised against Deployments.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ledger
+  namespace: e2e-fixtures
+spec:
+  serviceName: ledger
+  replicas: 1
+  selector:
+    matchLabels: { app: ledger }
+  template:
+    metadata:
+      labels: { app: ledger }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 64Mi }
+---
+# A DaemonSet: one per node, another controller kind for the resource views.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-probe
+  namespace: e2e-fixtures
+spec:
+  selector:
+    matchLabels: { app: node-probe }
+  template:
+    metadata:
+      labels: { app: node-probe }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+---
+# A Job that completes, and a CronJob that has not run yet: both render
+# differently from long-running workloads.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-once
+  namespace: e2e-fixtures
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: busybox:1.36
+          command: ["sh", "-c", "echo migration complete"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-report
+  namespace: e2e-fixtures
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: busybox:1.36
+              command: ["sh", "-c", "echo report"]
+---
+# A pod that logs continuously, so log streaming has a live source that keeps
+# producing rather than one that printed once and exited.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatty
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/purpose: "continuous log output for the log streaming views"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: chatty }
+  template:
+    metadata:
+      labels: { app: chatty }
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - 'i=0; while true; do i=$((i+1)); echo "fixture log line $i"; sleep 2; done'
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+---
+# HPA cases mirrored from radar's own golden matrix, testdata/hpa-diagnosis/
+# cases.json, which is the specification its Go and TypeScript implementations
+# are both tested against. Reproducing those shapes for real means this suite
+# asserts the SAME verdicts the unit tests assert, against a live cluster
+# instead of a fixture - if the two ever disagree, that gap is the bug.
+#
+# Only the cases that are deterministic without a metrics server are here.
+# "maxed", "min limited" and "scaling up" all need live metrics to drive the
+# HPA somewhere, so reproducing them would mean installing metrics-server and
+# generating load - a different and much slower kind of test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-pinned
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/case: "pinned replicas -> 'HPA is configured for a fixed replica count of 5'"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hpa-pinned }
+  template:
+    metadata:
+      labels: { app: hpa-pinned }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+---
+# minReplicas == maxReplicas: the HPA cannot move, which the product should
+# report as pinned rather than as a healthy autoscaler.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-pinned
+  namespace: e2e-fixtures
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: hpa-pinned }
+  minReplicas: 5
+  maxReplicas: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-paused
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/case: "zero replicas -> 'HPA scaling is disabled because the target has zero replicas'"
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: hpa-paused }
+  template:
+    metadata:
+      labels: { app: hpa-paused }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-paused
+  namespace: e2e-fixtures
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: hpa-paused }
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 80 }
+---
+# Target pods declare no CPU request, so utilisation cannot be computed even
+# with a metrics server present. The product should name the cause, not just
+# report an absence.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-no-requests
+  namespace: e2e-fixtures
+  annotations:
+    radar-e2e/case: "metrics unavailable -> 'Add CPU requests to the target pods so HPA can compute replicas'"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hpa-no-requests }
+  template:
+    metadata:
+      labels: { app: hpa-no-requests }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-no-requests
+  namespace: e2e-fixtures
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: hpa-no-requests }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 80 }

@@ -51,6 +51,7 @@ NS="${NS:-radar-hub}"
 RADAR_NS="${RADAR_NS:-radar}"
 DEMO_NS="${DEMO_NS:-e2e-demo}"
 DEMO_DEPLOY="${DEMO_DEPLOY:-timeline-probe}"
+FIXTURE_NS="${FIXTURE_NS:-e2e-fixtures}"
 CLUSTER_DISPLAY_NAME="${CLUSTER_DISPLAY_NAME:-e2e-kind}"
 HUB_PORT="${HUB_PORT:-18080}"
 HUB_URL="http://localhost:${HUB_PORT}"
@@ -205,6 +206,35 @@ seed_workload() {
   $K -n "$DEMO_NS" create deployment "$DEMO_DEPLOY" --image=registry.k8s.io/pause:3.9 --replicas=2 \
     --dry-run=client -o yaml | $K apply -f - >/dev/null
   $K -n "$DEMO_NS" rollout status "deploy/$DEMO_DEPLOY" --timeout=120s
+
+  # The wider fixture: several controller kinds, config and secrets, and three
+  # deliberately broken workloads. Standing a cluster up costs minutes; giving
+  # the specs only one healthy Deployment to look at wastes most of that, and
+  # leaves every problem-surfacing page tested in its empty state only.
+  say "seed cluster fixtures (${FIXTURE_NS})"
+  $K apply -f "$DIR/fixtures/cluster.yaml" >/dev/null
+
+  # Wait only on what can actually become ready. broken-image and
+  # unschedulable are MEANT to stay broken - waiting on them would hang the
+  # harness for the exact reason the fixture exists.
+  $K -n "$FIXTURE_NS" rollout status deploy/storefront --timeout=180s
+  $K -n "$FIXTURE_NS" rollout status deploy/chatty --timeout=180s
+
+  # And confirm the broken ones really are broken before any spec asserts on
+  # them: a fixture that quietly started working would turn "the product failed
+  # to report a problem" into a passing test.
+  local phase=""
+  for _ in $(seq 1 40); do
+    phase="$($K -n "$FIXTURE_NS" get pods -l app=broken-image \
+      -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' 2>/dev/null || true)"
+    case "$phase" in *ImagePull*|*ErrImage*) break ;; esac
+    sleep 3
+  done
+  case "$phase" in
+    *ImagePull*|*ErrImage*) echo "  broken-image is failing as intended ($phase)" ;;
+    *) echo "  WARNING: broken-image never reached an image-pull failure (state: ${phase:-unknown});" \
+            "specs that assert on a live problem may report a false all-clear" >&2 ;;
+  esac
 }
 
 hub_api() {
@@ -322,6 +352,7 @@ run_tests() {
     CLUSTER_ID="$(cat "$REPO_ROOT/$CLUSTER_ID_FILE" 2>/dev/null)" \
     KUBE_CONTEXT="$KUBE_CONTEXT" DEMO_NS="$DEMO_NS" DEMO_DEPLOY="$DEMO_DEPLOY" \
     NS="$NS" RADAR_NS="$RADAR_NS" RADAR_DIR="$RADAR_DIR" HELM_REPO_URL="$HELM_REPO_URL" \
+    FIXTURE_NS="$FIXTURE_NS" \
     npx playwright test ${SPECS:-}
   cd "$REPO_ROOT"
 }
