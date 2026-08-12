@@ -64,9 +64,16 @@ async function checkTab(page: Page, label: string, testInfo: Parameters<typeof c
   // and no aria-controls, so there is nothing to target directly. Asserting on
   // the rendered text is cruder but catches what matters: a tab that selects
   // and then shows nothing.
+  // expect.poll, not expect.soft(fn).toPass(): toPass retries until the
+  // callback stops THROWING, and one that returns a number never throws, so it
+  // passes on the first call and asserts nothing.
   await expect
-    .soft(async () => (await page.locator('body').innerText()).trim().length, `the ${label} tab selected but rendered almost nothing`)
-    .toPass({ timeout: 15_000 });
+    .poll(async () => (await page.locator('body').innerText()).trim().length, {
+      message: `the ${label} tab selected but rendered almost nothing`,
+      timeout: 15_000,
+      intervals: [500, 1000, 2000],
+    })
+    .toBeGreaterThan(200);
   const rendered = (await page.locator('body').innerText()).trim();
   expect
     .soft(rendered.length, `the ${label} tab selected but rendered almost no text (${rendered.length} chars)`)

@@ -54,9 +54,17 @@ test('the dashboard agrees with the sources its own pages are built on', async (
 
   /** Poll until the dashboard contains `needle`, then report `why` if it never does. */
   const shows = async (needle: string, why: string) => {
+    // expect.poll, not expect.soft(fn).toPass(): toPass retries until the
+    // callback stops THROWING, and a callback that returns a boolean never
+    // throws - so it passes on the first call and asserts nothing. poll
+    // retries on the VALUE, which is what is wanted here.
     await expect
-      .soft(async () => (await text()).includes(needle), why)
-      .toPass({ timeout: 45_000, intervals: [1000, 2000, 3000] });
+      .poll(async () => (await text()).includes(needle), {
+        message: why,
+        timeout: 45_000,
+        intervals: [1000, 2000, 3000],
+      })
+      .toBe(true);
   };
 
   // --- Clusters -----------------------------------------------------------
