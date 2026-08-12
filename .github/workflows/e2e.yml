@@ -257,9 +257,17 @@ jobs:
         run: gunzip -c images.tar.gz | docker load
 
       - name: Install kind
-        uses: helm/kind-action@v1
-        with:
-          install_only: true
+        # Installed directly rather than via helm/kind-action, which was pinned
+        # to the moving @v1 tag: a release of it began failing with
+        # "No such container: kind-registry" even under install_only, and took
+        # every scenario job down before a single test ran. We only ever needed
+        # the binary - run.sh creates the cluster itself - so this drops an
+        # external dependency from the critical path of all 20 jobs and pins
+        # the version instead of tracking whatever @v1 points at today.
+        run: |
+          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          kind version
 
       - uses: actions/setup-node@v6
         with:
@@ -369,9 +377,17 @@ jobs:
           path: .e2e-repos/helm-charts
 
       - name: Install kind
-        uses: helm/kind-action@v1
-        with:
-          install_only: true
+        # Installed directly rather than via helm/kind-action, which was pinned
+        # to the moving @v1 tag: a release of it began failing with
+        # "No such container: kind-registry" even under install_only, and took
+        # every scenario job down before a single test ran. We only ever needed
+        # the binary - run.sh creates the cluster itself - so this drops an
+        # external dependency from the critical path of all 20 jobs and pins
+        # the version instead of tracking whatever @v1 points at today.
+        run: |
+          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          kind version
 
       - uses: actions/setup-node@v6
         with:
