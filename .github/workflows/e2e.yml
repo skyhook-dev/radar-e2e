@@ -265,7 +265,19 @@ jobs:
         # external dependency from the critical path of all 20 jobs and pins
         # the version instead of tracking whatever @v1 points at today.
         run: |
-          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          # Retried: kind.sigs.k8s.io/dl redirects to GitHub releases, which
+          # returned 503 for a stretch today - the same window that timed out a
+          # helm chart download and threw a TLS error at api.github.com. A
+          # single curl makes every one of the 20 scenario jobs depend on one
+          # request to a third party succeeding first time.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64; then
+              break
+            fi
+            echo "kind download attempt $attempt failed, retrying in $((attempt * 5))s" >&2
+            sleep $((attempt * 5))
+          done
+          test -s /tmp/kind || { echo "::error::could not download kind after 5 attempts"; exit 1; }
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           kind version
 
@@ -385,7 +397,19 @@ jobs:
         # external dependency from the critical path of all 20 jobs and pins
         # the version instead of tracking whatever @v1 points at today.
         run: |
-          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          # Retried: kind.sigs.k8s.io/dl redirects to GitHub releases, which
+          # returned 503 for a stretch today - the same window that timed out a
+          # helm chart download and threw a TLS error at api.github.com. A
+          # single curl makes every one of the 20 scenario jobs depend on one
+          # request to a third party succeeding first time.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64; then
+              break
+            fi
+            echo "kind download attempt $attempt failed, retrying in $((attempt * 5))s" >&2
+            sleep $((attempt * 5))
+          done
+          test -s /tmp/kind || { echo "::error::could not download kind after 5 attempts"; exit 1; }
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           kind version
 
