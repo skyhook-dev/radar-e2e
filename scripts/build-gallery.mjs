@@ -221,11 +221,29 @@ const shrink = (src, dest) =>
   new Promise((resolve) => {
     execFile(
       'ffmpeg',
-      // Cap the width at 854 without ever upscaling, so a recording made at a
-      // larger size (an older run, or a local override) costs neither the
-      // encode time nor the bytes of its full resolution. -2 keeps the aspect
-      // ratio and an even height, which the encoder requires.
-      ['-v', 'error', '-y', '-i', src, '-vf', "scale='min(854,iw)':-2,fps=8", '-c:v', 'libvpx',
+      // Three things, in order:
+      //
+      // scale - cap the width at 854 without ever upscaling, so a recording
+      //   made at a larger size costs neither the encode time nor the bytes of
+      //   its full resolution. -2 keeps the aspect ratio and an even height.
+      // fps - Playwright records at a fixed 25fps, far more than a walkthrough
+      //   needs. This has to come BEFORE mpdecimate, not instead of it:
+      //   mpdecimate keeps every distinct frame at whatever rate it is fed, so
+      //   on a busy recording it alone produced a bigger file than a plain
+      //   frame-rate cap. Capping first bounds the rate, decimating then
+      //   removes the idle, and the two together beat either one.
+      // mpdecimate - drop frames that are near-identical to the one before.
+      //   Most of a test's wall time is spent waiting on a screen that is not
+      //   changing, and that idle is the bulk of the file: on a real 77s
+      //   recording only ~9s contained any visible change. Thresholds are set
+      //   sensitive on purpose, so a spinner or a single row appearing is kept;
+      //   a laxer setting saved barely any more bytes.
+      // setpts - restamp the surviving frames evenly, otherwise they keep their
+      //   original timestamps and the gaps play back as a frozen picture,
+      //   which would defeat the whole exercise.
+      ['-v', 'error', '-y', '-i', src,
+       '-vf', "scale='min(854,iw)':-2,fps=8,mpdecimate=hi=64*8:lo=64*3:frac=0.002,setpts=N/8/TB",
+       '-r', '8', '-c:v', 'libvpx',
        '-deadline', 'realtime', '-cpu-used', '8', '-crf', '45', '-b:v', '0', '-an', dest],
       (err) => {
         // A recording that will not re-encode still belongs in the review.
@@ -333,6 +351,10 @@ function recordings(scenario) {
   };
   return `    <div class="surface">
       <h3>Session recordings <code style="color:var(--muted)">${byTitle.size} test${byTitle.size === 1 ? '' : 's'}</code></h3>
+      <p class="hint" style="padding: 0 14px">
+        Stretches where the screen was not changing have been removed, so a recording plays back much
+        shorter than the test took. The time shown is the real duration of the test, not of the video.
+      </p>
 ${[...byTitle.entries()]
   .map(
     ([t, g]) => `      <div class="rec">

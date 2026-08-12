@@ -105,12 +105,24 @@ looked like; the recording says how it got there. They load lazily, so nothing i
 fetched until you press play.
 
 Recordings are made at 854px wide, the smallest size where the product's body
-text stays readable, and the gallery job re-encodes them to 8fps - Playwright
-records at a fixed 25fps and offers no way to change it, which is far more than
-a UI walkthrough needs. Together that is roughly an eight-fold reduction,
-measured rather than assumed, and the console line and page header both report
-the before and after. Without ffmpeg on PATH the recordings still ship, just
-uncompressed.
+text stays readable, and the gallery job then does two things to them: caps the
+frame rate at 8fps (Playwright records at a fixed 25fps with no way to change
+it) and drops frames that are near-identical to the one before.
+
+That second step is where most of the saving comes from. A test spends the bulk
+of its wall time waiting on a screen that is not changing: of one real 77s
+recording, about 9s contained any visible change at all. Removing the idle took
+it from 3.3 MB to 86 KB. The consequence to know about is that a recording plays
+back much shorter than its test took, so the page states this and shows the real
+test duration rather than the video's.
+
+The order matters and is not interchangeable: mpdecimate keeps every distinct
+frame at whatever rate it is fed, so on a busy recording it alone produced a
+larger file than a plain frame-rate cap. Capping first and decimating second
+beats either on its own.
+
+Without ffmpeg on PATH the recordings still ship, just uncompressed, and the
+build says so. The console line and page header report the before and after.
 
 Recording is on by default in CI and only on failure locally. Override with
 `E2E_VIDEO=on|retain-on-failure|off`.
