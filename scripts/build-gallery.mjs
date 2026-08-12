@@ -313,10 +313,15 @@ for (const shot of shots) {
   byScenario.set(shot.scenario, scenario);
 }
 
-// A scenario with recordings but no screenshots still gets a section: `mcp`
-// tests an API surface and takes no pictures, and dropping it here would ship
-// its recordings inside the artifact with nothing in the page pointing at them.
-const scenarios = [...new Set([...byScenario.keys(), ...videosByScenario.keys()])].sort();
+// Every scenario that produced anything at all gets a section, including one
+// that produced no images and no recordings: `mcp` tests an API surface and
+// takes no pictures, and now that recordings are failure-only it has neither
+// when it passes. Keying off the reports as well means it still appears, with
+// its outcome banner saying it passed - a scenario silently vanishing from the
+// report on a clean run is the opposite of what this page is for.
+const scenarios = [
+  ...new Set([...byScenario.keys(), ...videosByScenario.keys(), ...outcomes.map((o) => o.scenario)]),
+].sort();
 // A surface is one screen; a screenshot is one image of it. With both themes
 // captured on both variants a single surface can be four images, so reporting
 // only one of the two numbers reads as if most of the run went missing.
