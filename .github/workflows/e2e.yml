@@ -199,56 +199,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - scenario: sign-in
-            specs: smoke
-          - scenario: timeline
-            specs: timeline
+        # One job per DOMAIN, not per spec. A cluster takes ~3 minutes to
+        # stand up and the specs that ran on it took seconds, so most of that
+        # setup bought nothing; grouping related specs onto one cluster spends
+        # it on coverage instead. SPECS is a word-split Playwright filter, so
+        # this needs no change to the specs themselves.
+        #
+        # The last four keep their own cluster deliberately - each changes
+        # state the others would inherit: gitops installs CRDs and restarts
+        # radar, known-issues sets the namespace filter that leaks server-side,
+        # cluster-lifecycle scales the agent to zero and rotates its token, and
+        # multi-cluster attaches a second agent.
+          - scenario: shell
+            specs: smoke cluster-views timeline mcp
+          - scenario: workloads
+            specs: workload-tabs resources write-actions
+          - scenario: fleet
+            specs: issues alerts applications-packages certs-checks
           - scenario: helm
-            specs: helm
-          - scenario: resources
-            specs: resources
-          - scenario: logs
-            specs: logs
-          - scenario: issues
-            specs: issues
-          - scenario: settings
-            specs: settings
-          - scenario: cluster-views
-            specs: cluster-views
-          - scenario: alerts
-            specs: alerts
-          - scenario: certs-checks
-            specs: certs-checks
-          - scenario: applications-packages
-            specs: applications-packages
-          - scenario: multi-cluster
-            specs: multi-cluster
-          - scenario: cluster-lifecycle
-            specs: cluster-lifecycle
-          - scenario: workload-tabs
-            specs: workload-tabs
-          - scenario: write-actions
-            specs: write-actions
-          - scenario: exec
-            specs: exec
-          - scenario: mcp
-            specs: mcp
-          - scenario: onboarding
-            specs: onboarding
-          # Installs Argo CD from scratch in its own beforeAll, so budget for
-          # the controller image pull on a cold runner.
+            specs: helm helm-actions
+          - scenario: diagnostics
+            specs: diagnose logs exec
+          - scenario: admin
+            specs: settings org-admin onboarding
           - scenario: gitops
             specs: gitops
-          - scenario: helm-actions
-            specs: helm-actions
-          - scenario: diagnose
-            specs: diagnose
-          - scenario: org-admin
-            specs: org-admin
-          # Confirmed defects, pinned with test.fail(). Runs like any other
-          # scenario and goes red when a bug is fixed - see KNOWN-ISSUES.md.
           - scenario: known-issues
             specs: known-issues
+          - scenario: cluster-lifecycle
+            specs: cluster-lifecycle
+          - scenario: multi-cluster
+            specs: multi-cluster
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
@@ -338,56 +319,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - scenario: sign-in
-            specs: smoke
-          - scenario: timeline
-            specs: timeline
+        # One job per DOMAIN, not per spec. A cluster takes ~3 minutes to
+        # stand up and the specs that ran on it took seconds, so most of that
+        # setup bought nothing; grouping related specs onto one cluster spends
+        # it on coverage instead. SPECS is a word-split Playwright filter, so
+        # this needs no change to the specs themselves.
+        #
+        # The last four keep their own cluster deliberately - each changes
+        # state the others would inherit: gitops installs CRDs and restarts
+        # radar, known-issues sets the namespace filter that leaks server-side,
+        # cluster-lifecycle scales the agent to zero and rotates its token, and
+        # multi-cluster attaches a second agent.
+          - scenario: shell
+            specs: smoke cluster-views timeline mcp
+          - scenario: workloads
+            specs: workload-tabs resources write-actions
+          - scenario: fleet
+            specs: issues alerts applications-packages certs-checks
           - scenario: helm
-            specs: helm
-          - scenario: resources
-            specs: resources
-          - scenario: logs
-            specs: logs
-          - scenario: issues
-            specs: issues
-          - scenario: settings
-            specs: settings
-          - scenario: cluster-views
-            specs: cluster-views
-          - scenario: alerts
-            specs: alerts
-          - scenario: certs-checks
-            specs: certs-checks
-          - scenario: applications-packages
-            specs: applications-packages
-          - scenario: multi-cluster
-            specs: multi-cluster
-          - scenario: cluster-lifecycle
-            specs: cluster-lifecycle
-          - scenario: workload-tabs
-            specs: workload-tabs
-          - scenario: write-actions
-            specs: write-actions
-          - scenario: exec
-            specs: exec
-          - scenario: mcp
-            specs: mcp
-          - scenario: onboarding
-            specs: onboarding
-          # Installs Argo CD from scratch in its own beforeAll, so budget for
-          # the controller image pull on a cold runner.
+            specs: helm helm-actions
+          - scenario: diagnostics
+            specs: diagnose logs exec
+          - scenario: admin
+            specs: settings org-admin onboarding
           - scenario: gitops
             specs: gitops
-          - scenario: helm-actions
-            specs: helm-actions
-          - scenario: diagnose
-            specs: diagnose
-          - scenario: org-admin
-            specs: org-admin
-          # Confirmed defects, pinned with test.fail(). Runs like any other
-          # scenario and goes red when a bug is fixed - see KNOWN-ISSUES.md.
           - scenario: known-issues
             specs: known-issues
+          - scenario: cluster-lifecycle
+            specs: cluster-lifecycle
+          - scenario: multi-cluster
+            specs: multi-cluster
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
