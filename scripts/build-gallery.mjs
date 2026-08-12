@@ -421,7 +421,9 @@ function recordings(scenario) {
     byTitle.set(v.title, group);
   }
   const cell = (v, label) => {
-    if (!v) return `<div class="pane"><div class="label"><span>${label}</span></div><div class="missing">not recorded</div></div>`;
+    // Recordings are kept only for failures, so an empty side normally means
+    // this variant passed - which is information, not a gap.
+    if (!v) return `<div class="pane"><div class="label"><span>${label}</span></div><div class="missing">no recording - this variant did not fail</div></div>`;
     const secs = v.duration ? ` &middot; ${(v.duration / 1000).toFixed(1)}s` : '';
     const status = v.status && v.status !== 'passed' ? ` <strong>${esc(v.status)}</strong>` : '';
     return `<div class="pane">
@@ -432,8 +434,9 @@ function recordings(scenario) {
   return `    <div class="surface">
       <h3>Session recordings <code style="color:var(--muted)">${byTitle.size} test${byTitle.size === 1 ? '' : 's'}</code></h3>
       <p class="hint" style="padding: 0 14px">
-        Stretches where the screen was not changing have been removed, so a recording plays back much
-        shorter than the test took. The time shown is the real duration of the test, not of the video.
+        Recordings are kept only for tests that failed. Stretches where the screen was not changing
+        have been removed, so a recording plays back much shorter than the test took - the time shown
+        is the real duration of the test, not of the video.
       </p>
 ${[...byTitle.entries()]
   .map(

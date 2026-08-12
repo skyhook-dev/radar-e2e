@@ -98,10 +98,13 @@ self-contained `index.html`: main on the left, published on the right, one
 click to swap themes, console errors reported per scenario. Download the
 `visual-review` artifact and open `index.html` - no server, no network.
 
-Every test also records its whole session to video, embedded in the same page
+A test that fails also has its whole session recorded, embedded in the same page
 under the scenario it belongs to and paired across variants like the
 screenshots, with a download link on each. The screenshots say what a surface
-looked like; the recording says how it got there. They load lazily, so nothing is
+looked like; the recording says how it got there, which is the question worth
+answering when something broke. Recording every test was tried and dropped: the
+recordings nobody opens are the ones for tests that passed, and they were
+spending the budget the screenshots need. They load lazily, so nothing is
 fetched until you press play.
 
 Recordings are made at 854px wide, the smallest size where the product's body
@@ -124,8 +127,8 @@ beats either on its own.
 Without ffmpeg on PATH the recordings still ship, just uncompressed, and the
 build says so. The console line and page header report the before and after.
 
-Recording is on by default in CI and only on failure locally. Override with
-`E2E_VIDEO=on|retain-on-failure|off`.
+Override with `E2E_VIDEO=on|retain-on-failure|off` - `on` records every test,
+which is useful when you want a walkthrough of a passing flow.
 
 ## Distribution tests
 

@@ -35,21 +35,24 @@ export default defineConfig({
     // published release. Specs that attach their own mid-test screenshots
     // still do - both end up in the report.
     screenshot: 'on',
-    // A recording of the whole session, not just the moments a spec chose to
-    // photograph: the screenshots say what a surface looked like, the video
-    // says how it got there and what it did on the way.
+    // A recording of the whole session, kept only when a test fails.
+    //
+    // Recording everything was tried and dropped: the recordings nobody opens
+    // are the ones for tests that passed, and they were spending the artifact
+    // budget the screenshots need in order to be worth reading. On a failure
+    // the recording is the most useful thing in the report, because it shows
+    // how the test got where it got - which a screenshot of the end state
+    // cannot.
     //
     // 854x480 is about Playwright's own default and is the smallest size where
     // the product's body text stays readable - checked against a real frame,
     // not guessed. Playwright records at a fixed 25fps with no way to change
     // it, so the frame rate comes down in the gallery job instead.
     video:
-      (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) === 'off'
+      process.env.E2E_VIDEO === 'off'
         ? 'off'
         : {
-            mode: (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) as
-              | 'on'
-              | 'retain-on-failure',
+            mode: (process.env.E2E_VIDEO ?? 'retain-on-failure') as 'on' | 'retain-on-failure',
             size: { width: 854, height: 480 },
           },
   },
