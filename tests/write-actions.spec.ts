@@ -144,7 +144,12 @@ test('scaling a deployment from the UI changes the cluster and the UI reflects i
 
   await openDeploymentDrawer(page);
 
-  await page.getByRole('button', { name: 'Scale' }).click();
+  // Scoped to the drawer, not the page. The Resources sidebar lists kinds by
+  // category, and the HorizontalPodAutoscaler entry's accessible name is also
+  // "Scale" - so a page-wide lookup matches two buttons and Playwright refuses
+  // in strict mode. This selector was always ambiguous; nothing had put an HPA
+  // in the cluster to expose it until the shared fixture did.
+  await page.locator('button:not(nav button)').filter({ hasText: /^Scale$/ }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog, 'no Scale dialog opened').toBeVisible();
   await expect(dialog.getByText(`Scale ${DEPLOYMENT}`)).toBeVisible();

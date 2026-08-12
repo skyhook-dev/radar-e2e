@@ -111,8 +111,14 @@ test('every tab the workload view offers opens and renders', async ({ page }, te
   const renderedByTab = new Map<string, string>();
   for (const label of offered) {
     // Every offered tab gets opened, including ones added since this was
-    // written. The name is normalised because a tab may carry a count badge.
-    const name = label.split(/\s{2,}|\n/)[0];
+    // written.
+    //
+    // The badge is concatenated with NO separator - the Timeline tab reads
+    // "Timeline32" once the fixture has generated 32 events - so the label has
+    // to be cut at the first non-letter rather than split on whitespace. This
+    // passed locally where the cluster was quiet and failed in CI where it was
+    // not, which is the kind of difference a badge count makes.
+    const name = (label.match(/^[A-Za-z][A-Za-z ]*/)?.[0] ?? label).trim();
     renderedByTab.set(name, await checkTab(page, name, testInfo));
   }
 
