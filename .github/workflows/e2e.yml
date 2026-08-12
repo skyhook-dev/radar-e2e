@@ -187,6 +187,30 @@ jobs:
             specs: settings
           - scenario: cluster-views
             specs: cluster-views
+          - scenario: alerts
+            specs: alerts
+          - scenario: certs-checks
+            specs: certs-checks
+          - scenario: applications-packages
+            specs: applications-packages
+          - scenario: multi-cluster
+            specs: multi-cluster
+          - scenario: write-actions
+            specs: write-actions
+          - scenario: exec
+            specs: exec
+          - scenario: mcp
+            specs: mcp
+          - scenario: onboarding
+            specs: onboarding
+          # Installs Argo CD from scratch in its own beforeAll, so budget for
+          # the controller image pull on a cold runner.
+          - scenario: gitops
+            specs: gitops
+          # Confirmed defects, pinned with test.fail(). Runs like any other
+          # scenario and goes red when a bug is fixed - see KNOWN-ISSUES.md.
+          - scenario: known-issues
+            specs: known-issues
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
