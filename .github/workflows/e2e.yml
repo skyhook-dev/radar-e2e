@@ -520,6 +520,12 @@ jobs:
           pattern: playwright-*
           path: artifacts
 
+      # Not on the GitHub-hosted Ubuntu image. Without it the gallery still
+      # builds, but ships the recordings at Playwright's 25fps, which is the
+      # difference between a ~20MB artifact and an ~80MB one.
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+
       - name: Build the visual review
         run: |
           node scripts/build-gallery.mjs artifacts gallery \
