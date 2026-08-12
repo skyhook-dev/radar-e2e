@@ -80,6 +80,24 @@ resolve_admin_password() {
   fi
 }
 
+# helm, retried. In the published variant the chart is fetched from GitHub
+# releases at install time, and that download has timed out three times today
+# ("context deadline exceeded" pulling radar-hub-1.4.0.tgz), taking whole
+# scenario jobs down for a reason that has nothing to do with the product.
+# Only the network step is worth retrying; a genuine chart or values error
+# fails the same way every attempt and still surfaces after the last one.
+helm_retry() {
+  local attempt
+  for attempt in 1 2 3 4; do
+    if helm "$@"; then return 0; fi
+    if [ "$attempt" -lt 4 ]; then
+      echo "  helm failed (attempt ${attempt}/4), retrying in $((attempt * 10))s" >&2
+      sleep $((attempt * 10))
+    fi
+  done
+  return 1
+}
+
 say() { printf "\n\033[36m== %s ==\033[0m\n" "$*"; }
 die() { printf "\033[31m%s\033[0m\n" "$*" >&2; exit 1; }
 
@@ -186,7 +204,7 @@ EOF
     hub_chart="skyhook/radar-hub"
   fi
 
-  helm upgrade --install radar-hub "$hub_chart" \
+  helm_retry upgrade --install radar-hub "$hub_chart" \
     --kube-context "kind-${CLUSTER}" \
     --namespace "$NS" --create-namespace \
     -f "$DIR/.run/values.yaml" --wait --timeout 10m
@@ -277,7 +295,7 @@ connect_cluster() {
     radar_image_args=()
   fi
 
-  helm upgrade --install radar "$radar_chart" \
+  helm_retry upgrade --install radar "$radar_chart" \
     --kube-context "$KUBE_CONTEXT" \
     --namespace "$RADAR_NS" --create-namespace \
     "${radar_image_args[@]}" \
