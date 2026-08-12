@@ -94,7 +94,11 @@ for (const shot of shots) {
 }
 
 const scenarios = [...byScenario.keys()].sort();
+// A surface is one screen; a screenshot is one image of it. With both themes
+// captured on both variants a single surface can be four images, so reporting
+// only one of the two numbers reads as if most of the run went missing.
 const totalSurfaces = [...byScenario.values()].reduce((n, m) => n + m.size, 0);
+const totalShots = shots.length;
 const bothVariants = [...byScenario.values()].reduce(
   (n, m) => n + [...m.values()].filter((v) => v.main?.light && v.published?.light).length,
   0,
@@ -156,8 +160,9 @@ const html = `<!doctype html>
 <header>
   <h1>radar e2e - visual review</h1>
   <div class="sub">
-    ${stamp} UTC &middot; ${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'} &middot; ${totalSurfaces} screenshots
-    &middot; ${bothVariants} surfaces captured on both variants${onlyMain ? `, ${onlyMain} on main only` : ''}
+    ${stamp} UTC &middot; ${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'}
+    &middot; ${totalSurfaces} surface${totalSurfaces === 1 ? '' : 's'} &middot; ${totalShots} screenshot${totalShots === 1 ? '' : 's'}
+    &middot; ${bothVariants} surface${bothVariants === 1 ? '' : 's'} captured on both variants${onlyMain ? `, ${onlyMain} on main only` : ''}
     ${runUrl ? `&middot; <a href="${esc(runUrl)}">run log</a>` : ''}
   </div>
 </header>
@@ -218,4 +223,7 @@ ${errs ? `    <div class="warn"><strong>Console errors during this scenario:</st
 `;
 
 fs.writeFileSync(path.join(outDir, 'index.html'), html);
-console.log(`gallery: ${scenarios.length} scenarios, ${totalSurfaces} screenshots -> ${path.join(outDir, 'index.html')}`);
+console.log(
+  `gallery: ${scenarios.length} scenarios, ${totalSurfaces} surfaces, ` +
+    `${totalShots} screenshots -> ${path.join(outDir, 'index.html')}`,
+);
