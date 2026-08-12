@@ -264,3 +264,45 @@ because the failure looks like a broken hub rather than a slow node, and
 because a customer on a small or busy node - or a CI runner running kind plus
 the whole stack plus a browser - can hit the same thing. A couple of seconds of
 timeout, or exposing it in values, would remove the trap.
+
+## The desktop `.rpm` cannot be installed on RHEL 9 and its rebuilds
+
+`radar-desktop_<tag>_linux_amd64.rpm` declares a dependency on
+`webkit2gtk4.1`. Fedora ships that package; RHEL 9, Rocky 9 and AlmaLinux 9 do
+not carry it in their base repositories, so `dnf install ./radar-desktop.rpm`
+stops at:
+
+```
+nothing provides webkit2gtk4.1 needed by radar-desktop-1.9.2-1.x86_64
+```
+
+Reproduced in the `.rpm install (rockylinux:9)` job; the same job passes on
+`fedora:40`, which isolates the cause to the distribution's package set rather
+than to the `.rpm` being malformed. A user on the most common enterprise Linux
+family cannot install the desktop app from the published `.rpm` at all, and the
+download page does not mention that EPEL (or an equivalent) is required first.
+
+Pinned in the workflow: the job tolerates exactly this message and warns, and
+fails if the install starts failing for any other reason. When the dependency
+is satisfiable, the pinned branch stops being taken and the pin should be
+removed here and in `.github/workflows/dist-e2e.yml`.
+
+## The published Windows desktop build carries no version resource
+
+`Radar.exe` from `radar-desktop_<tag>_windows_amd64.zip` reports an empty
+`ProductVersion` and an empty `FileVersion`:
+
+```
+Radar.exe version resource: ProductVersion='' FileVersion=''
+```
+
+On Windows that is the field Explorer's Properties dialog, winget and every
+software-inventory tool read, so the app shows as unversioned and two different
+releases are indistinguishable once extracted. It also removes the only way to
+check the version at all for this binary: `Radar.exe` is a GUI-subsystem
+executable, so `Radar.exe --version` writes nothing to the console and does not
+set an exit code, no matter what the flag does internally.
+
+Pinned in the `Windows / Desktop launch smoke` job, which warns and continues so
+the launch smoke still runs. If a version appears but is wrong, that is a hard
+failure rather than a pin.
