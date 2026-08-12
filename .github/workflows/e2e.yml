@@ -211,25 +211,25 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: smoke cluster-views timeline mcp
+            specs: tests/smoke.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
           - scenario: workloads
-            specs: workload-tabs resources write-actions
+            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: issues alerts applications-packages certs-checks
+            specs: tests/issues.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
-            specs: helm helm-actions
+            specs: tests/helm.spec.ts tests/helm-actions.spec.ts
           - scenario: diagnostics
-            specs: diagnose logs exec
+            specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
-            specs: settings org-admin onboarding
+            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
-            specs: gitops
+            specs: tests/gitops.spec.ts
           - scenario: known-issues
-            specs: known-issues
+            specs: tests/known-issues.spec.ts
           - scenario: cluster-lifecycle
-            specs: cluster-lifecycle
+            specs: tests/cluster-lifecycle.spec.ts
           - scenario: multi-cluster
-            specs: multi-cluster
+            specs: tests/multi-cluster.spec.ts
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
@@ -331,25 +331,25 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: smoke cluster-views timeline mcp
+            specs: tests/smoke.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
           - scenario: workloads
-            specs: workload-tabs resources write-actions
+            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: issues alerts applications-packages certs-checks
+            specs: tests/issues.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
-            specs: helm helm-actions
+            specs: tests/helm.spec.ts tests/helm-actions.spec.ts
           - scenario: diagnostics
-            specs: diagnose logs exec
+            specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
-            specs: settings org-admin onboarding
+            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
-            specs: gitops
+            specs: tests/gitops.spec.ts
           - scenario: known-issues
-            specs: known-issues
+            specs: tests/known-issues.spec.ts
           - scenario: cluster-lifecycle
-            specs: cluster-lifecycle
+            specs: tests/cluster-lifecycle.spec.ts
           - scenario: multi-cluster
-            specs: multi-cluster
+            specs: tests/multi-cluster.spec.ts
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
