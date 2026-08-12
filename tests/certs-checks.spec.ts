@@ -311,12 +311,58 @@ test.describe('Checks', () => {
     // suite and is customer-owned (not kube-system), so it's real,
     // default-visible queue signal regardless of which agent's turn it is
     // to run: no probes, no resource limits, no non-root constraint.
-    const check = cluster!.checks?.find((c) =>
+    // A workload can trip SEVERAL checks, and which one is listed first is not
+    // stable - it depends on what else is in the cluster, so it changed the
+    // moment related specs began sharing one. Taking the first match then
+    // asserting its card is visible couples this test to that ordering: the
+    // queue hides a check whose findings are all platform-managed, so picking
+    // such a check fails for a reason that has nothing to do with the product.
+    //
+    // Collect every check carrying a finding for this workload and require at
+    // least one to reach the queue. That is the actual claim - a real finding
+    // from a customer-owned workload is visible to a user - and it no longer
+    // depends on which check happens to sort first.
+    const candidates = (cluster!.checks ?? []).filter((c) =>
       c.findings.some((f) => f.resource.namespace === CERTS_NAMESPACE && f.resource.name === checksWorkload),
     );
-    expect(check, `no audit check carries a finding for ${CERTS_NAMESPACE}/${checksWorkload}`).toBeTruthy();
+    expect(
+      candidates.length,
+      `no audit check carries a finding for ${CERTS_NAMESPACE}/${checksWorkload}`,
+    ).toBeGreaterThan(0);
+    testInfo.annotations.push({
+      type: 'checks carrying this workload',
+      description: candidates.map((c) => `${c.checkID} (${c.title})`).join(', '),
+    });
 
-    await page.goto(`/checks?check=${encodeURIComponent(check!.checkID)}`);
+    let check: (typeof candidates)[number] | undefined;
+    const notVisible: string[] = [];
+    for (const candidate of candidates) {
+      await page.goto(`/checks?check=${encodeURIComponent(candidate.checkID)}`);
+      // Shorter per candidate than the old single 120s wait, because there are
+      // now several to try; the total budget is similar.
+      // expect().toBeVisible(), not locator.isVisible(): the latter returns
+      // immediately and its timeout option does nothing, so it answers "is it
+      // on screen right now" before the queue has rendered. Getting that wrong
+      // made all 11 candidates report absent in 3.5s and looked exactly like a
+      // product defect.
+      const rendered = await expect(page.getByText(candidate.title, { exact: true }).first())
+        .toBeVisible({ timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (rendered) {
+        check = candidate;
+        break;
+      }
+      notVisible.push(`${candidate.checkID} (${candidate.title})`);
+    }
+
+    expect(
+      check,
+      `the Checks queue rendered no card for any check carrying a finding on ${CERTS_NAMESPACE}/${checksWorkload}. ` +
+        `Tried: ${notVisible.join(', ')}. The queue hides checks whose findings are all platform-managed, so this ` +
+        `means every check this workload trips was classified that way - a customer-owned workload with a real ` +
+        `finding is invisible to the user.`,
+    ).toBeTruthy();
 
     // Generous window, single navigation. Radar caches its checks computation
     // per cluster, so the fleet API above can be fresher than the payload the
