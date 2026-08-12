@@ -155,6 +155,12 @@ the private `radar-hub-web` checkout uses a GitHub App token minted per job; and
 the Playwright report is uploaded on success as well as failure, because its
 attachments are the only evidence anyone can look at afterwards.
 
+Manual and scheduled runs are in separate concurrency lanes, so neither
+cancels the other. A manual dispatch still supersedes an earlier manual
+dispatch, which is what you want while iterating on a change. The cost is that
+an overlapping pair shares the 20 concurrent job slots standard runners allow,
+so both take longer than either would alone.
+
 Repository secrets it needs:
 
 | Secret | What it is |

@@ -12,9 +12,22 @@
 # here - the repos under test are checked out per run.
 name: E2E (browser)
 
+# Manual and scheduled runs get their own lanes, so neither can cancel the
+# other. A manual dispatch still supersedes an earlier manual dispatch, which is
+# what you want while iterating; a scheduled sweep never kills a run someone
+# started deliberately, and never gets killed by one either.
+#
+# cancel-in-progress takes an expression, evaluated against the incoming run, so
+# "who is allowed to cancel" is a property of the trigger rather than of the
+# workflow. A scheduled run therefore waits for the previous scheduled run
+# instead of cancelling it.
+#
+# Trade-off accepted knowingly: standard runners allow 20 concurrent jobs and
+# this suite is 45, so an overlapping manual and scheduled run share those slots
+# and both take longer than either would alone.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 permissions:
   contents: read
