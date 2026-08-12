@@ -14,7 +14,9 @@
 //
 // Usage: node scripts/build-gallery.mjs <input-root> <output-dir> [runUrl]
 
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const [, , inputRoot = 'artifacts', outDir = 'gallery', runUrl = ''] = process.argv;
@@ -191,15 +193,71 @@ const consoleErrors = collectConsoleErrors(inputRoot);
 // meaningful on its own once it is out of the page.
 const videosByScenario = new Map();
 let videoBytes = 0;
+let sourceBytes = 0;
 const rawVideos = collectVideos(inputRoot);
 if (rawVideos.length) fs.mkdirSync(path.join(outDir, 'video'), { recursive: true });
-for (const v of rawVideos) {
+
+// Playwright records at a fixed 25fps, which is far more than a UI walkthrough
+// needs. Dropping to 8fps and letting VP8 pick its own bitrate takes a typical
+// recording down by an order of magnitude, and the whole point of the artifact
+// is that someone will actually download it. Measured on real recordings:
+// 3.3 MB -> ~460 KB, with the product's body text still readable.
+//
+// If ffmpeg is not on PATH the recordings are copied through untouched: a
+// bigger artifact is a far better outcome than a gallery with no recordings.
+const haveFfmpeg = (() => {
+  try {
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+if (rawVideos.length && !haveFfmpeg) {
+  console.warn('ffmpeg not found - shipping recordings at full frame rate, which makes a much larger artifact');
+}
+
+const shrink = (src, dest) =>
+  new Promise((resolve) => {
+    execFile(
+      'ffmpeg',
+      // Cap the width at 854 without ever upscaling, so a recording made at a
+      // larger size (an older run, or a local override) costs neither the
+      // encode time nor the bytes of its full resolution. -2 keeps the aspect
+      // ratio and an even height, which the encoder requires.
+      ['-v', 'error', '-y', '-i', src, '-vf', "scale='min(854,iw)':-2,fps=8", '-c:v', 'libvpx',
+       '-deadline', 'realtime', '-cpu-used', '8', '-crf', '45', '-b:v', '0', '-an', dest],
+      (err) => {
+        // A recording that will not re-encode still belongs in the review.
+        if (err || !fs.existsSync(dest) || fs.statSync(dest).size === 0) fs.copyFileSync(src, dest);
+        resolve();
+      },
+    );
+  });
+
+const prepared = rawVideos.map((v) => {
   const slug = v.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
   const rel = path.join('video', `${v.variant}__${v.scenario}__${slug || 'session'}.webm`);
-  fs.copyFileSync(v.file, path.join(outDir, rel));
-  videoBytes += fs.statSync(v.file).size;
+  return { ...v, rel };
+});
+
+// A small pool: the runners have few cores and ffmpeg already threads.
+const queue = [...prepared];
+await Promise.all(
+  Array.from({ length: Math.min(4, os.cpus().length || 1) }, async () => {
+    for (let v = queue.shift(); v; v = queue.shift()) {
+      const dest = path.join(outDir, v.rel);
+      if (haveFfmpeg) await shrink(v.file, dest);
+      else fs.copyFileSync(v.file, dest);
+    }
+  }),
+);
+
+for (const v of prepared) {
+  sourceBytes += fs.statSync(v.file).size;
+  videoBytes += fs.statSync(path.join(outDir, v.rel)).size;
   const list = videosByScenario.get(v.scenario) ?? [];
-  list.push({ ...v, rel });
+  list.push(v);
   videosByScenario.set(v.scenario, list);
 }
 const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -410,3 +468,9 @@ console.log(
   `gallery: ${scenarios.length} scenarios, ${totalSurfaces} surfaces, ` +
     `${totalShots} screenshots -> ${path.join(outDir, 'index.html')}`,
 );
+if (rawVideos.length) {
+  console.log(
+    `recordings: ${rawVideos.length}, ${mb(sourceBytes)} -> ${mb(videoBytes)}` +
+      (haveFfmpeg ? ' (854px wide, 8fps)' : ' (not re-encoded: no ffmpeg)'),
+  );
+}

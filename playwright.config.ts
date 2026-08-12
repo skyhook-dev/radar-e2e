@@ -30,9 +30,12 @@ export default defineConfig({
     screenshot: 'on',
     // A recording of the whole session, not just the moments a spec chose to
     // photograph: the screenshots say what a surface looked like, the video
-    // says how it got there and what it did on the way. 720p keeps a scenario's
-    // recordings to a few MB, which is what makes shipping them in the review
-    // artifact affordable.
+    // says how it got there and what it did on the way.
+    //
+    // 854x480 is about Playwright's own default and is the smallest size where
+    // the product's body text stays readable - checked against a real frame,
+    // not guessed. Playwright records at a fixed 25fps with no way to change
+    // it, so the frame rate comes down in the gallery job instead.
     video:
       (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) === 'off'
         ? 'off'
@@ -40,7 +43,7 @@ export default defineConfig({
             mode: (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) as
               | 'on'
               | 'retain-on-failure',
-            size: { width: 1280, height: 720 },
+            size: { width: 854, height: 480 },
           },
   },
   // One sign-in for the whole suite. The hub allows 5 break-glass logins per

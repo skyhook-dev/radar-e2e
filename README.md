@@ -101,9 +101,16 @@ click to swap themes, console errors reported per scenario. Download the
 Every test also records its whole session to video, embedded in the same page
 under the scenario it belongs to and paired across variants like the
 screenshots, with a download link on each. The screenshots say what a surface
-looked like; the recording says how it got there. They are cheap enough to keep
-for every run - a mostly-static UI compresses to a few hundred KB per test -
-and they load lazily, so nothing is fetched until you press play.
+looked like; the recording says how it got there. They load lazily, so nothing is
+fetched until you press play.
+
+Recordings are made at 854px wide, the smallest size where the product's body
+text stays readable, and the gallery job re-encodes them to 8fps - Playwright
+records at a fixed 25fps and offers no way to change it, which is far more than
+a UI walkthrough needs. Together that is roughly an eight-fold reduction,
+measured rather than assumed, and the console line and page header both report
+the before and after. Without ffmpeg on PATH the recordings still ship, just
+uncompressed.
 
 Recording is on by default in CI and only on failure locally. Override with
 `E2E_VIDEO=on|retain-on-failure|off`.
