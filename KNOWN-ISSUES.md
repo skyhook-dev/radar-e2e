@@ -72,6 +72,142 @@ cluster's cosmetic filter is not.
 
 ---
 
+## 2. `/api/auth/dev-signin` is mounted regardless of the dev-bypass setting
+
+**Confirmed** 2026-08-12. Test: `tests/known-issues.spec.ts`.
+
+The dev-bypass sign-in route is registered unconditionally, although its own
+doc comment states it is "Only registered when DevBypass is on". The session it
+issues cannot authenticate anything, so this is **not** an authentication
+bypass - but the endpoint should not be reachable on a hub that has dev bypass
+disabled.
+
+Details, impact assessment and the reproduction are deliberately NOT in this
+file: this repository is public and the issue is unfixed. They are recorded in
+the internal defect list held with the effort notes, and should move to the
+private tracker.
+
+Fix: register the route inside the `DevBypass` conditional, as documented.
+
+---
+
+## 3. Helm write controls are shown as enabled but always fail
+
+**Confirmed** 2026-08-12. Test: `tests/helm-actions.spec.ts`.
+
+Radar gates Helm write operations (Upgrade, Rollback, Uninstall, editing
+Values) behind a deliberate, secure-by-default RBAC check: writing a chart
+needs broad `create/update/patch/delete` permissions because a chart can
+create any resource type, so that grant is opt-in via `rbac.helm=true` on the
+Radar chart, off by default. That part is working as designed and is not the
+bug.
+
+The bug is that two different code paths answer "can Helm writes happen?"
+using two different identities, and only one of them is what the UI shows:
+
+- `handleCapabilities` (`internal/server/server.go`) computes the
+  `helmWrite` field the frontend uses to decide whether to render Upgrade /
+  Rollback / Edit-Values as enabled. When auth is on it calls
+  `k8s.CheckCapabilitiesForUser(user.Username, user.Groups)`, which runs the
+  RBAC check **as the impersonated end user**. A cluster-admin (or the
+  break-glass admin used by this suite) can create Secrets, so `helmWrite`
+  comes back `true`.
+- `requireHelmWrite` (`internal/helm/handlers.go`), which every write
+  endpoint (`.../values` PUT, upgrade, upgrade-stream, rollback,
+  rollback-stream, uninstall) calls before doing anything, instead calls
+  plain `k8s.CheckCapabilities(ctx)` - no user argument - which checks
+  **Radar's own ServiceAccount**, via its own comment: "if the service
+  account can create secrets, it likely has the broad RBAC granted by
+  `rbac.helm=true`." That SA only gets `secrets:create` (and the wildcard
+  write rule in `deploy/helm/radar/templates/clusterrole.yaml:62`) when the
+  chart was installed with `rbac.helm=true`.
+
+So on any Radar install that has not opted into `rbac.helm=true` (the
+default), every user - including full cluster admins - sees fully-enabled
+Upgrade/Rollback/Edit-Values controls that unconditionally 403 the moment
+they are used, with no upfront indication (no disabled state, no banner) that
+writes are unavailable. The failure only surfaces after Edit -> Preview ->
+Apply, or History -> Rollback -> confirm, several steps into the flow.
+
+Reproduction (against a Radar install without `rbac.helm=true`, as any
+authenticated user):
+
+```bash
+curl -b jar "$HUB/c/$CLUSTER_ID/api/capabilities" | jq .helmWrite
+# true - the frontend renders Upgrade/Rollback/Edit-Values as enabled
+
+curl -b jar -X PUT -H 'Content-Type: application/json' \
+  "$HUB/c/$CLUSTER_ID/api/helm/releases/<namespace>/<release>/values" \
+  -d '{"values":"message: v2"}'
+# HTTP 403
+# {"error":"Helm write operations require additional RBAC permissions.
+#           Set rbac.helm=true in the Radar Helm chart values."}
+```
+
+Also reproduced end-to-end through the UI: editing a release's Values and
+clicking Apply, and confirming Rollback from History, both show the same
+403 after going through the full flow (screenshots attached by
+`tests/helm-actions.spec.ts`), while `/api/capabilities` reported
+`helmWrite: true` for the same session throughout.
+
+Fix: `handleCapabilities` should compute `helmWrite` the same way
+`requireHelmWrite` enforces it (Radar's own ServiceAccount permissions), not
+the calling user's. If a per-user check is also useful, both should be
+`&&`-ed together rather than the enforced one being silently stricter than
+the one the UI acts on.
+
+---
+
+## 4. The Reachability tab is entirely absent from the Hub UI (frontend pinned two releases behind the backend)
+
+**Confirmed** 2026-08-12. Test: `tests/diagnose.spec.ts`.
+
+Opening any workload's Reachability tab through the Hub -
+`/workload/{Kind}/{ns}/{name}?tab=diagnose` (or the current name,
+`?tab=reachability`) - silently lands on Overview. No tab, no inline "Verify
+the live path" glance, no error: the entire network-reachability feature is
+invisible. Reproduced against three purpose-built Services and also against
+the pre-existing `kube-system/kube-dns` Service, so it is not
+resource-specific - the feature simply is not in the page at all.
+
+The backend is unaffected: `GET /c/{clusterId}/api/trace/{Kind}/{ns}/{name}
+?probe=true` on radar, proxied by the Hub exactly as the tab would call it,
+works correctly and returns accurate, ground-truth-matching verdicts -
+confirmed against three Services with known, deliberately different real
+outcomes (a genuinely healthy backend, a Service whose declared port nothing
+listens on, and a Service whose selector matches no pods) in
+`tests/diagnose.spec.ts`.
+
+Reproduction:
+
+```bash
+# the feature's own client code isn't shipped at all
+curl -s "$HUB/" | grep -o 'src="[^"]*\.js"'          # -> /assets/index-XXXX.js
+curl -s "$HUB/assets/index-XXXX.js" | grep -c isDiagnoseKind   # 0
+curl -s "$HUB/assets/index-XXXX.js" | grep -c 'api/trace'      # 0
+
+# yet the backend the tab would call works fine, proxied through the same hub
+curl -b jar "$HUB/c/$CLUSTER_ID/api/trace/Service/kube-system/kube-dns?probe=true"
+# HTTP 200, full verdict/headline/routes JSON
+```
+
+Mechanism: `radar-hub-web/package-lock.json` pins `@skyhook-io/radar-app` to
+**1.9.4**. The Reachability feature (`isDiagnoseKind`, the "Reachability" tab,
+the `/api/trace` client calls) was added in radar commit `0de3cb6d`
+("feat(reachability): Network-path diagnosis", 2026-08-06) and first
+published as **`radar-app-v1.9.6`** - two releases after what the Hub
+currently has installed. `radar-hub-web/package.json` declares
+`^1.9.4` (which would normally resolve to 1.9.7), but the lockfile has not
+been regenerated since the dependency bump landed, so the installed/bundled
+version stays 1.9.4.
+
+Not a logic bug in either codebase - a dependency version lag between two
+repos that release independently. Bumping `@skyhook-io/radar-app` past
+`1.9.6` in `radar-hub-web/package.json` and regenerating the lockfile
+restores the feature; no code change should be needed in either repo.
+
+---
+
 # Observations (not pinned with a test)
 
 Things confirmed while writing the suite that are not functional defects, so
@@ -109,3 +245,22 @@ not within ~90s, and that the only discovery call site runs at startup. If
 there is a slower refresh path somewhere, this is a delay rather than a
 permanent gap; either way an operator install is currently not reflected
 promptly.
+
+## Hub probes use a 1-second timeout, so a busy node restarts a healthy hub
+
+`charts/radar-hub` sets `timeoutSeconds: 1` (the Kubernetes default) on the
+hub's liveness and readiness probes, with no way to raise it from values.
+
+On a CPU-starved node that is enough to fail: observed the hub's liveness probe
+time out repeatedly on a loaded machine and **restart a hub that was serving
+fine** - its own log showed a clean boot and `license verified` throughout, and
+`pg_isready` on the bundled Postgres was timing out at the same moment. The
+deployment never reached Available, so `helm install --wait` hung until it gave
+up.
+
+Not filed as a defect: the environment really was starved (five kind clusters
+on one Docker VM), and a 1s timeout is Kubernetes' own default. Recorded
+because the failure looks like a broken hub rather than a slow node, and
+because a customer on a small or busy node - or a CI runner running kind plus
+the whole stack plus a browser - can hit the same thing. A couple of seconds of
+timeout, or exposing it in values, would remove the trap.

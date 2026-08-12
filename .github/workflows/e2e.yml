@@ -157,13 +157,28 @@ jobs:
           retention-days: 1
           compression-level: 0
 
+  # Every scenario runs TWICE, as two independent job matrices:
+  #
+  #   e2e-main       images built from the current main of all three repos,
+  #                  chart from the helm-charts working tree. "Does our code
+  #                  work?"
+  #   e2e-published  the released chart from the public helm repo with its own
+  #                  default image tags, nothing built. "Does the product we
+  #                  shipped work?"
+  #
+  # Read together they make a red scenario interpretable: main red while
+  # published is green is a regression that has NOT reached customers yet -
+  # catch it before publishing. Both red means it is already shipped. Published
+  # red alone points at the release or at drift in the environment around it.
+  #
+  # e2e-published deliberately does NOT depend on the build job: when main is
+  # too broken to compile, the published baseline is exactly the signal you want.
+  #
   # One scenario per job, each with its own cluster: a scenario that wedges its
   # cluster cannot take the others down with it, and they finish in the time of
-  # the slowest rather than the sum. Adding a scenario is one list entry.
-  #
-  # These jobs never check out private source - they run prebuilt images
-  # against the two public repos (the chart and radar's chart).
-  e2e:
+  # the slowest rather than the sum. Adding a scenario is one list entry in
+  # each matrix.
+  e2e-main:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -207,6 +222,12 @@ jobs:
           # the controller image pull on a cold runner.
           - scenario: gitops
             specs: gitops
+          - scenario: helm-actions
+            specs: helm-actions
+          - scenario: diagnose
+            specs: diagnose
+          - scenario: org-admin
+            specs: org-admin
           # Confirmed defects, pinned with test.fail(). Runs like any other
           # scenario and goes red when a bug is fixed - see KNOWN-ISSUES.md.
           - scenario: known-issues
@@ -278,7 +299,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-${{ matrix.scenario }}
+          name: playwright-main-${{ matrix.scenario }}
           path: |
             playwright-report/
             test-results/
@@ -290,3 +311,180 @@ jobs:
       - name: Tear down
         if: always()
         run: ./run.sh down || true
+
+  e2e-published:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: sign-in
+            specs: smoke
+          - scenario: timeline
+            specs: timeline
+          - scenario: helm
+            specs: helm
+          - scenario: resources
+            specs: resources
+          - scenario: logs
+            specs: logs
+          - scenario: issues
+            specs: issues
+          - scenario: settings
+            specs: settings
+          - scenario: cluster-views
+            specs: cluster-views
+          - scenario: alerts
+            specs: alerts
+          - scenario: certs-checks
+            specs: certs-checks
+          - scenario: applications-packages
+            specs: applications-packages
+          - scenario: multi-cluster
+            specs: multi-cluster
+          - scenario: write-actions
+            specs: write-actions
+          - scenario: exec
+            specs: exec
+          - scenario: mcp
+            specs: mcp
+          - scenario: onboarding
+            specs: onboarding
+          # Installs Argo CD from scratch in its own beforeAll, so budget for
+          # the controller image pull on a cold runner.
+          - scenario: gitops
+            specs: gitops
+          - scenario: helm-actions
+            specs: helm-actions
+          - scenario: diagnose
+            specs: diagnose
+          - scenario: org-admin
+            specs: org-admin
+          # Confirmed defects, pinned with test.fail(). Runs like any other
+          # scenario and goes red when a bug is fixed - see KNOWN-ISSUES.md.
+          - scenario: known-issues
+            specs: known-issues
+    steps:
+      - name: Checkout this harness
+        uses: actions/checkout@v6
+
+      - name: Checkout radar
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/radar
+          ref: ${{ inputs.radar_ref || 'main' }}
+          path: .e2e-repos/radar
+
+      - name: Checkout helm-charts
+        uses: actions/checkout@v6
+        with:
+          repository: skyhook-io/helm-charts
+          ref: ${{ inputs.charts_ref || 'main' }}
+          path: .e2e-repos/helm-charts
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # No admin-password secret: run.sh generates a throwaway credential per
+      # run. Playwright traces record the login form being filled, so a shared
+      # secret would land inside the uploaded artifacts on every failure.
+      - name: Run browser e2e
+        env:
+          RADAR_HUB_LICENSE: ${{ secrets.E2E_HUB_LICENSE }}
+          VARIANT: published
+          RADAR_DIR: ${{ github.workspace }}/.e2e-repos/radar
+          CHARTS_DIR: ${{ github.workspace }}/.e2e-repos/helm-charts
+          CLUSTER: pub-${{ matrix.scenario }}
+          SPECS: ${{ matrix.specs }}
+        run: ./run.sh all
+
+      - name: Collect diagnostics
+        if: always()
+        run: ./run.sh logs > diagnostics.txt 2>&1 || true
+
+      # Uploaded on success too: the report carries the timeline screenshot and
+      # the matched event rows, which are the only proof anyone can look at that
+      # the timeline actually rendered.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-published-${{ matrix.scenario }}
+          path: |
+            playwright-report/
+            test-results/
+            diagnostics.txt
+          retention-days: 7
+
+      # Tolerant on purpose: when the job fails before kind is installed there
+      # is nothing to delete, and a teardown error would mask the real failure.
+      - name: Tear down
+        if: always()
+        run: ./run.sh down || true
+
+  # The whole point of running both variants: make the difference readable
+  # without opening 36 jobs. Writes a scenario-by-variant table into the run
+  # summary and calls out the row that matters - green published, red main -
+  # which is a regression that has not shipped yet.
+  compare:
+    needs: [e2e-main, e2e-published]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Summarise main vs published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '.jobs[] | [.name, .conclusion] | @tsv' > jobs.tsv
+
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import re
+          rows = {}
+          for line in open('jobs.tsv'):
+              name, _, conclusion = line.rstrip('\n').partition('\t')
+              m = re.match(r'e2e-(main|published) \((\S+?),', name)
+              if not m:
+                  continue
+              variant, scenario = m.group(1), m.group(2)
+              rows.setdefault(scenario, {})[variant] = conclusion or 'skipped'
+
+          mark = {'success': 'pass', 'failure': 'FAIL', 'cancelled': 'cancelled', 'skipped': 'skipped'}
+          print('## main vs published\n')
+          print('| scenario | built from main | published release |')
+          print('|---|---|---|')
+          regressions = []
+          for scenario in sorted(rows):
+              m_ = rows[scenario].get('main', 'missing')
+              p_ = rows[scenario].get('published', 'missing')
+              if m_ == 'failure' and p_ == 'success':
+                  regressions.append(scenario)
+              print(f'| {scenario} | {mark.get(m_, m_)} | {mark.get(p_, p_)} |')
+
+          print()
+          if regressions:
+              print('### Regressions not yet published\n')
+              print('These pass on the released product and fail on main - fix before publishing:\n')
+              for s in regressions:
+                  print(f'- **{s}**')
+          else:
+              print('No scenario passes on the release while failing on main.')
+          PY

@@ -35,6 +35,17 @@ HUB_DIR="${HUB_DIR:-../radar-hub}"
 HUB_WEB_DIR="${HUB_WEB_DIR:-../radar-hub-web}"
 CHARTS_DIR="${CHARTS_DIR:-../helm-charts}"
 RADAR_DIR="${RADAR_DIR:-../radar}"
+# main      = build the three images from the repos under test and install the
+#             chart from the helm-charts working tree. Answers "does our code
+#             work?".
+# published = install the RELEASED chart from the public helm repo with its own
+#             default image tags, building nothing. Answers "does the product
+#             we shipped work?".
+# Running both against the same scenarios is what makes a red scenario
+# interpretable: main red + published green is a regression we have not shipped
+# yet; both red is already in customers' hands.
+VARIANT="${VARIANT:-main}"
+HELM_REPO_URL="${HELM_REPO_URL:-https://skyhook-io.github.io/helm-charts}"
 CLUSTER="${CLUSTER:-radar-e2e}"
 NS="${NS:-radar-hub}"
 RADAR_NS="${RADAR_NS:-radar}"
@@ -76,6 +87,10 @@ require_license() {
 }
 
 build_images() {
+  if [ "$VARIANT" = "published" ]; then
+    say "variant=published - building nothing, the released images are pulled from the registry"
+    return 0
+  fi
   # CI builds the three images with cache-aware actions and sets SKIP_BUILD=1.
   if [ "${SKIP_BUILD:-0}" = "1" ]; then
     say "skipping image build (SKIP_BUILD=1) - expecting radar-hub:e2e, radar-hub-web:e2e, radar:e2e"
@@ -102,7 +117,9 @@ up() {
 
   say "create kind cluster '$CLUSTER'"
   kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 120s
-  kind load docker-image radar-hub:e2e radar-hub-web:e2e radar:e2e --name "$CLUSTER"
+  if [ "$VARIANT" != "published" ]; then
+    kind load docker-image radar-hub:e2e radar-hub-web:e2e radar:e2e --name "$CLUSTER"
+  fi
 
   # The chart pins pods to amd64 nodes. A kind node inherits the host
   # architecture, so on Apple Silicon that selector leaves every pod Pending.
@@ -110,9 +127,12 @@ up() {
   local arch
   arch="$($K get node -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}')"
 
-  say "install radar-hub chart (arch=$arch)"
-  cat > "$DIR/.run/values.yaml" <<EOF
-image:
+  # In published mode the chart's OWN image defaults are what we want: they are
+  # the officially released hub/web pairing. Overriding them would test a
+  # combination nobody ships.
+  local image_values=""
+  if [ "$VARIANT" != "published" ]; then
+    image_values="image:
   hub:
     repository: radar-hub
     tag: e2e
@@ -120,7 +140,12 @@ image:
   web:
     repository: radar-hub-web
     tag: e2e
-    pullPolicy: IfNotPresent
+    pullPolicy: IfNotPresent"
+  fi
+
+  say "install radar-hub chart (variant=$VARIANT, arch=$arch)"
+  cat > "$DIR/.run/values.yaml" <<EOF
+${image_values}
 license:
   key: ${RADAR_HUB_LICENSE}
 postgres:
@@ -153,7 +178,14 @@ service:
   web:
     type: ClusterIP
 EOF
-  helm upgrade --install radar-hub "$CHARTS_DIR/charts/radar-hub" \
+  local hub_chart="$CHARTS_DIR/charts/radar-hub"
+  if [ "$VARIANT" = "published" ]; then
+    helm repo add skyhook "$HELM_REPO_URL" >/dev/null 2>&1 || true
+    helm repo update skyhook >/dev/null
+    hub_chart="skyhook/radar-hub"
+  fi
+
+  helm upgrade --install radar-hub "$hub_chart" \
     --kube-context "kind-${CLUSTER}" \
     --namespace "$NS" --create-namespace \
     -f "$DIR/.run/values.yaml" --wait --timeout 10m
@@ -204,10 +236,21 @@ connect_cluster() {
   [ -n "$cluster_id" ] && [ "$token" != "null" ] || die "failed to register a cluster with the hub"
   echo "$cluster_id" > "$CLUSTER_ID_FILE"
 
-  helm upgrade --install radar "$RADAR_DIR/deploy/helm/radar" \
+  local radar_chart="$RADAR_DIR/deploy/helm/radar"
+  local radar_image_args=(--set image.repository=radar --set image.tag=e2e)
+  if [ "$VARIANT" = "published" ]; then
+    helm repo add skyhook "$HELM_REPO_URL" >/dev/null 2>&1 || true
+    helm repo update skyhook >/dev/null
+    radar_chart="skyhook/radar"
+    # Released chart, released image tag - exactly what `helm install` gives a
+    # customer today.
+    radar_image_args=()
+  fi
+
+  helm upgrade --install radar "$radar_chart" \
     --kube-context "$KUBE_CONTEXT" \
     --namespace "$RADAR_NS" --create-namespace \
-    --set image.repository=radar --set image.tag=e2e \
+    "${radar_image_args[@]}" \
     --set cloud.enabled=true \
     --set "cloud.url=wss://radar-hub-web.${NS}.svc.cluster.local/agent" \
     --set "cloud.clusterName=${CLUSTER_DISPLAY_NAME}" \

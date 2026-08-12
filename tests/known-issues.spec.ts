@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, request as playwrightRequest } from '@playwright/test';
 import { assertClusterConnected, clusterId, kubectl } from './helpers';
 
 // Confirmed product defects, pinned so they cannot be forgotten.
@@ -91,4 +91,30 @@ test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page })
     issues.some((i: { name: string }) => i.name === WORKLOAD),
     'a fleet-wide view must not be narrowed by one cluster\'s namespace switcher - a critical issue disappeared from the fleet Issues feed',
   ).toBe(true);
+});
+
+test('the dev-bypass sign-in endpoint is not exposed when dev bypass is off', async ({ page }) => {
+  test.fail(
+    true,
+    'KNOWN ISSUE 2: /api/auth/dev-signin is mounted unconditionally, so an unauthenticated caller can create user rows on any hub. See KNOWN-ISSUES.md.',
+  );
+
+  // Deliberately session-less: a Playwright API context inherits the project's
+  // saved admin session unless storage state is cleared, which would make this
+  // pass for entirely the wrong reason.
+  const anonymous = await playwrightRequest.newContext({
+    baseURL: process.env.HUB_URL ?? 'http://localhost:18080',
+    storageState: { cookies: [], origins: [] },
+  });
+  const res = await anonymous.post('/api/auth/dev-signin', {
+    headers: { 'X-Hub-Auth': '1' },
+    data: { email: `unauthenticated-probe-${Date.now()}@example.invalid` },
+  });
+  const status = res.status();
+  await anonymous.dispose();
+
+  expect(
+    status,
+    'an unauthenticated caller reached the dev-bypass sign-in endpoint on a hub with dev bypass disabled, and the hub created a user row for the address it supplied',
+  ).not.toBe(200);
 });
