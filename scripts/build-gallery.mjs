@@ -60,6 +60,97 @@ function collect(root) {
   return shots;
 }
 
+/**
+ * Session recordings, one per test, tagged with the test's real title.
+ *
+ * Playwright names its output directories by truncating the test title around a
+ * hash ("alerts-a-rule-matching-a-r-0bca7-ppears-as-an-alert-instance"), so the
+ * titles come from the JSON report instead. Where the report is missing the
+ * directory name is de-slugged as a fallback - a recording with an awkward
+ * label still beats no recording.
+ */
+function collectVideos(root) {
+  const videos = [];
+
+  /** Walk the JSON report's nested suites and yield every test result. */
+  const eachTest = (suite, trail, out) => {
+    // The outermost suite is the file (foo.spec.ts, auth.setup.ts); the
+    // scenario heading already says which file this is.
+    const here = suite.title && !/\.ts$/.test(suite.title) ? [...trail, suite.title] : trail;
+    for (const spec of suite.specs ?? []) {
+      for (const t of spec.tests ?? []) {
+        for (const r of t.results ?? []) {
+          out.push({
+            title: [...here, spec.title].filter(Boolean).join(' > '),
+            status: r.status,
+            duration: r.duration,
+            videoPaths: (r.attachments ?? [])
+              .filter((a) => a.name === 'video' && a.path)
+              .map((a) => a.path.replace(/\\/g, '/')),
+          });
+        }
+      }
+    }
+    for (const child of suite.suites ?? []) eachTest(child, here, out);
+  };
+
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const m = entry.name.match(/^playwright-(main|published)-(.+)$/);
+    const variant = m ? m[1] : 'main';
+    const scenario = m ? m[2] : entry.name;
+    const artifact = path.join(root, entry.name);
+    const resultsDir = path.join(artifact, 'test-results');
+    if (!fs.existsSync(resultsDir)) continue;
+
+    // Absolute paths in the report point at the CI machine, so match on the
+    // tail from test-results/ onwards, which survives the artifact round trip.
+    const byTail = new Map();
+    for (const dir of fs.readdirSync(resultsDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const file = path.join(resultsDir, dir.name, 'video.webm');
+      if (fs.existsSync(file)) byTail.set(`${dir.name}/video.webm`, { file, dir: dir.name });
+    }
+    if (!byTail.size) continue;
+
+    const claimed = new Set();
+    const reportPath = path.join(resultsDir, 'results.json');
+    if (fs.existsSync(reportPath)) {
+      try {
+        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        const tests = [];
+        for (const s of report.suites ?? []) eachTest(s, [], tests);
+        for (const t of tests) {
+          for (const p of t.videoPaths) {
+            const tail = p.split('/').slice(-2).join('/');
+            const hit = byTail.get(tail);
+            if (!hit) continue;
+            claimed.add(tail);
+            videos.push({ variant, scenario, title: t.title, status: t.status, duration: t.duration, file: hit.file });
+          }
+        }
+      } catch {
+        /* a malformed report must not cost us the recordings themselves */
+      }
+    }
+
+    // Anything the report did not account for (including the shared sign-in
+    // step, which is its own project) still belongs in the review.
+    for (const [tail, hit] of byTail) {
+      if (claimed.has(tail)) continue;
+      videos.push({
+        variant,
+        scenario,
+        title: hit.dir.replace(/-chromium$|-setup$/, '').replace(/-/g, ' '),
+        status: undefined,
+        duration: undefined,
+        file: hit.file,
+      });
+    }
+  }
+  return videos;
+}
+
 /** Console-error attachments a spec wrote, keyed by scenario. */
 function collectConsoleErrors(root) {
   const found = {};
@@ -94,6 +185,24 @@ if (!shots.length) {
   process.exit(1);
 }
 const consoleErrors = collectConsoleErrors(inputRoot);
+
+// Copy the session recordings, keyed by scenario so each section can carry its
+// own. Names are slugged from the test title, which keeps a downloaded file
+// meaningful on its own once it is out of the page.
+const videosByScenario = new Map();
+let videoBytes = 0;
+const rawVideos = collectVideos(inputRoot);
+if (rawVideos.length) fs.mkdirSync(path.join(outDir, 'video'), { recursive: true });
+for (const v of rawVideos) {
+  const slug = v.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+  const rel = path.join('video', `${v.variant}__${v.scenario}__${slug || 'session'}.webm`);
+  fs.copyFileSync(v.file, path.join(outDir, rel));
+  videoBytes += fs.statSync(v.file).size;
+  const list = videosByScenario.get(v.scenario) ?? [];
+  list.push({ ...v, rel });
+  videosByScenario.set(v.scenario, list);
+}
+const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 // Copy images into the output under stable relative paths.
 fs.mkdirSync(path.join(outDir, 'img'), { recursive: true });
@@ -135,6 +244,49 @@ function pane(shot, alt) {
     `<img loading="lazy" src="${light}" data-light="${light}" data-dark="${dark}" alt="${esc(alt)}"></a>${noDark}`;
 }
 
+/**
+ * The session recordings for one scenario, grouped by test.
+ *
+ * preload="metadata" matters: with ~100 recordings on the page, preloading the
+ * media itself would pull the whole artifact into memory on open. Nothing is
+ * fetched until a reviewer presses play, and each has a download link for
+ * anyone who would rather watch it outside the page.
+ */
+function recordings(scenario) {
+  const list = videosByScenario.get(scenario);
+  if (!list?.length) return '';
+  const byTitle = new Map();
+  for (const v of list) {
+    const group = byTitle.get(v.title) ?? {};
+    group[v.variant] = v;
+    byTitle.set(v.title, group);
+  }
+  const cell = (v, label) => {
+    if (!v) return `<div class="pane"><div class="label"><span>${label}</span></div><div class="missing">not recorded</div></div>`;
+    const secs = v.duration ? ` &middot; ${(v.duration / 1000).toFixed(1)}s` : '';
+    const status = v.status && v.status !== 'passed' ? ` <strong>${esc(v.status)}</strong>` : '';
+    return `<div class="pane">
+            <div class="label"><span>${label}${secs}${status}</span><a href="${v.rel}" download>download</a></div>
+            <video controls preload="metadata" src="${v.rel}"></video>
+          </div>`;
+  };
+  return `    <div class="surface">
+      <h3>Session recordings <code style="color:var(--muted)">${byTitle.size} test${byTitle.size === 1 ? '' : 's'}</code></h3>
+${[...byTitle.entries()]
+  .map(
+    ([t, g]) => `      <div class="rec">
+        <div class="rectitle">${esc(t)}</div>
+        <div class="pair">
+          ${cell(g.main, 'built from main')}
+          ${cell(g.published, 'published release')}
+        </div>
+      </div>`,
+  )
+  .join('\n')}
+    </div>
+`;
+}
+
 const html = `<!doctype html>
 <meta charset="utf-8">
 <title>radar e2e - visual review</title>
@@ -170,6 +322,11 @@ const html = `<!doctype html>
   .themes button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
   .themes button.on { background: color-mix(in srgb, Canvas 80%, CanvasText); font-weight: 600; }
   .nodark { font-size: 11px; color: var(--muted); }
+  .rec { border-top: 1px solid var(--line); }
+  .rec:first-of-type { border-top: 0; }
+  .rectitle { padding: 9px 14px; font-size: 13px; }
+  .pane video { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; background: #000; }
+  .pane > .label a { font-size: 12px; }
   footer { padding: 24px 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 </style>
 <header>
@@ -178,6 +335,7 @@ const html = `<!doctype html>
     ${stamp} UTC &middot; ${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'}
     &middot; ${totalSurfaces} surface${totalSurfaces === 1 ? '' : 's'} &middot; ${totalShots} screenshot${totalShots === 1 ? '' : 's'}
     &middot; ${bothVariants} surface${bothVariants === 1 ? '' : 's'} captured on both variants${onlyMain ? `, ${onlyMain} on main only` : ''}
+    ${rawVideos.length ? `&middot; ${rawVideos.length} session recording${rawVideos.length === 1 ? '' : 's'} (${mb(videoBytes)})` : ''}
     ${runUrl ? `&middot; <a href="${esc(runUrl)}">run log</a>` : ''}
   </div>
 </header>
@@ -227,7 +385,7 @@ ${errs ? `    <div class="warn"><strong>Console errors during this scenario:</st
     </div>`,
       )
       .join('\n')}
-  </section>`;
+${recordings(scenario)}  </section>`;
   })
   .join('\n')}
 </main>

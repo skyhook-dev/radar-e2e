@@ -12,7 +12,13 @@ export default defineConfig({
   // The HTML report carries the attachments (matched events, timeline
   // screenshot), so CI produces it on success too - a scheduled run that only
   // reports on failure never shows anyone that the timeline actually rendered.
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // The JSON report is what lets the gallery label a recording with the test's
+  // real title and outcome. Playwright's own output directory names are
+  // truncated with a hash in the middle ("a-rule-matching-a-r-0bca7-ppears-as
+  // -an-alert-instance"), which is not something to put in front of a reviewer.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'test-results/results.json' }]]
+    : [['list'], ['json', { outputFile: 'test-results/results.json' }]],
   use: {
     baseURL: process.env.HUB_URL ?? 'http://localhost:18080',
     trace: 'retain-on-failure',
@@ -22,7 +28,20 @@ export default defineConfig({
     // published release. Specs that attach their own mid-test screenshots
     // still do - both end up in the report.
     screenshot: 'on',
-    video: 'retain-on-failure',
+    // A recording of the whole session, not just the moments a spec chose to
+    // photograph: the screenshots say what a surface looked like, the video
+    // says how it got there and what it did on the way. 720p keeps a scenario's
+    // recordings to a few MB, which is what makes shipping them in the review
+    // artifact affordable.
+    video:
+      (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) === 'off'
+        ? 'off'
+        : {
+            mode: (process.env.E2E_VIDEO ?? (process.env.CI ? 'on' : 'retain-on-failure')) as
+              | 'on'
+              | 'retain-on-failure',
+            size: { width: 1280, height: 720 },
+          },
   },
   // One sign-in for the whole suite. The hub allows 5 break-glass logins per
   // minute per IP, so a per-test login would start returning 429 as soon as the

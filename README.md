@@ -98,6 +98,16 @@ self-contained `index.html`: main on the left, published on the right, one
 click to swap themes, console errors reported per scenario. Download the
 `visual-review` artifact and open `index.html` - no server, no network.
 
+Every test also records its whole session to video, embedded in the same page
+under the scenario it belongs to and paired across variants like the
+screenshots, with a download link on each. The screenshots say what a surface
+looked like; the recording says how it got there. They are cheap enough to keep
+for every run - a mostly-static UI compresses to a few hundred KB per test -
+and they load lazily, so nothing is fetched until you press play.
+
+Recording is on by default in CI and only on failure locally. Override with
+`E2E_VIDEO=on|retain-on-failure|off`.
+
 ## Distribution tests
 
 `.github/workflows/dist-e2e.yml` is a separate, daily suite that asks a
