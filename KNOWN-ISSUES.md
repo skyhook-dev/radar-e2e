@@ -306,3 +306,25 @@ set an exit code, no matter what the flag does internally.
 Pinned in the `Windows / Desktop launch smoke` job, which warns and continues so
 the launch smoke still runs. If a version appears but is wrong, that is a hard
 failure rather than a pin.
+
+## View state is server-side and outlives the session
+
+Two filters in the hub are stored per user rather than per tab, so setting one
+changes what every later page load shows - including other tests, and other
+people signed in as the same account:
+
+- the namespace pick (`?namespaces=`), which is defects 1 and 11 in the list and
+  the reason `known-issues` runs on its own cluster
+- the Open/Snoozed/Dismissed/All selection on Issues and Checks
+
+This is recorded here because it constrains how tests are written rather than
+because it is necessarily wrong. It bit the suite for the third time today: the
+state-filter test walked every tab and left the selection on the last one, and a
+LATER RUN's search test then could not find an issue that was plainly present in
+`/api/fleet/issues`. The failure looked like a broken page and was a filter
+someone else had set minutes earlier.
+
+The rule that follows: any test touching one of these filters must put it back,
+the way `cluster-lifecycle` restores the agent it scaled down. A test that
+changes shared state and does not restore it is not isolated, however it is
+scheduled.

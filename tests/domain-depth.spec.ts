@@ -234,6 +234,20 @@ test('the state filters on a domain page change what it shows', async ({ page },
       await captureSurface(page, testInfo, `${domain.toLowerCase()}-filter-${tab.toLowerCase()}`);
     }
 
+    // Put the page back on its default filter before leaving.
+    //
+    // This test walks every state tab, and the selection persists - so ending
+    // on whichever tab happened to be last left the Issues page filtered for
+    // whatever ran next, including the search test in a LATER run, which then
+    // could not find an issue that was plainly there. A test that changes
+    // shared state has to change it back; the same reasoning the cluster
+    // lifecycle spec uses when it puts the agent back.
+    const defaultTab = tabs[0];
+    const back = page.getByRole('button', { name: new RegExp(`^\\s*${defaultTab}\\b`, 'i') }).first();
+    if (await back.isVisible().catch(() => false)) {
+      await back.click().catch(() => {});
+    }
+
     // Open and Dismissed cannot legitimately show the same thing when the
     // fixture guarantees open items and nothing has been dismissed. Identical
     // output after waiting for a change means the control is decorative.
@@ -247,6 +261,77 @@ test('the state filters on a domain page change what it shows', async ({ page },
             `the list to change - with open items present and nothing dismissed, at least one of these does nothing`,
         )
         .toBe(true);
+    }
+  }
+});
+
+// The remaining controls each domain page offers: do they respond at all?
+//
+// A control that does nothing when clicked is a defect regardless of what it
+// was meant to do, and it is invisible in a screenshot. What each one SHOULD
+// do varies and is not always inferable from outside - on /resources,
+// "Problems" and "Labels" change the page without changing the row set or the
+// columns, which is a design decision rather than a bug - so this asserts the
+// property that holds for all of them: clicking it changes what is rendered,
+// and does not produce an error.
+//
+// Verified against the running product before being written: Helm's Catalog
+// takes the table from 2 rows to 0 (nothing published to a repo here),
+// Problems moves the page by ~40 characters and Labels by ~900.
+const CONTROLS: { path: string; domain: string; controls: string[] }[] = [
+  { path: '/helm', domain: 'Helm', controls: ['Catalog', 'Installed'] },
+  { path: '/resources', domain: 'Resources', controls: ['Problems', 'Labels'] },
+  { path: '/applications', domain: 'Applications', controls: ['Unhealthy', 'Healthy', 'Idle'] },
+];
+
+test('the controls on a domain page do something when clicked', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await assertClusterConnected(page);
+
+  for (const { path, domain, controls } of CONTROLS) {
+    for (const name of controls) {
+      // Fresh load per control: several of these are toggles, and leaving one
+      // engaged changes what the next one starts from.
+      await page.goto(path);
+      await expect
+        .poll(async () => (await page.locator('body').innerText()).trim().length, {
+          message: `${path}: never rendered`,
+          timeout: 45_000,
+          intervals: [1000, 2000, 3000],
+        })
+        .toBeGreaterThan(200);
+
+      const control = page.getByRole('button', { name: new RegExp(`^\\s*${name}\\b`, 'i') }).first();
+      const there = await expect(control)
+        .toBeVisible({ timeout: 20_000 })
+        .then(() => true)
+        .catch(() => false);
+      expect
+        .soft(there, `${path}: the ${domain} page offers no "${name}" control, though the product renders one`)
+        .toBe(true);
+      if (!there) continue;
+
+      const before = (await page.locator('body').innerText()).trim();
+      await control.click();
+
+      await expect
+        .poll(async () => (await page.locator('body').innerText()).trim() !== before, {
+          message:
+            `${path}: clicking "${name}" on the ${domain} page changed nothing on screen - ` +
+            `the control is inert, whatever it was meant to do`,
+          timeout: 20_000,
+          intervals: [500, 1000, 2000],
+        })
+        .toBe(true);
+
+      await expect
+        .soft(
+          page.getByText(/something went wrong|failed to load/i).first(),
+          `${path}: clicking "${name}" on the ${domain} page produced an error`,
+        )
+        .toBeHidden({ timeout: 8_000 });
+
+      await captureSurface(page, testInfo, `${domain.toLowerCase()}-control-${name.toLowerCase()}`);
     }
   }
 });
