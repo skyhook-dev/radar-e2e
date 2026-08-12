@@ -188,3 +188,94 @@ test('drilling into the deployment shows its real replicas and pods', async ({ p
 
   await captureSurface(page, testInfo, 'workload-drawer-replicas');
 });
+
+// The resource drawer, opened for every kind the shared fixture provides.
+//
+// The test above opens the drawer once, for one Deployment, and checks the
+// replica count. That leaves the drawer untested for every other kind, and the
+// drawer is where a user actually inspects a resource - a kind whose drawer
+// throws, renders empty, or shows someone else's resource would fail nothing.
+//
+// Soft assertions throughout: a broken drawer on one kind must not stop the
+// sweep, or each run reveals exactly one bad kind and the next has to start
+// over. The fixture namespace is used so each row is a resource with known
+// identity rather than whatever happens to sort first.
+const FIXTURE_NS = process.env.FIXTURE_NS ?? 'e2e-fixtures';
+
+const DRAWER_KINDS: { kind: string; name: string }[] = [
+  { kind: 'Deployment', name: 'storefront' },
+  { kind: 'StatefulSet', name: 'ledger' },
+  { kind: 'DaemonSet', name: 'node-probe' },
+  { kind: 'Job', name: 'migrate-once' },
+  { kind: 'CronJob', name: 'nightly-report' },
+  { kind: 'Service', name: 'storefront' },
+  { kind: 'ConfigMap', name: 'storefront-config' },
+  { kind: 'Secret', name: 'storefront-secret' },
+];
+
+test('the resource drawer opens and renders the right resource for every kind', async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  await page.goto('/');
+  await assertClusterConnected(page);
+  await page.goto(`/c/${clusterId}/resources`);
+
+  // Wait for the sidebar ONCE before the loop. isVisible() answers "right now"
+  // and never waits, so calling it straight after a navigation reports every
+  // kind as missing - which is exactly what it did, producing eight confident
+  // failures about a sidebar that was merely still rendering.
+  await expect(
+    sidebarKindButton(page, 'Deployment'),
+    'the Resources sidebar never rendered its kind list',
+  ).toBeVisible({ timeout: 30_000 });
+
+  for (const { kind, name } of DRAWER_KINDS) {
+    const kindButton = sidebarKindButton(page, kind);
+    // Safe now: the sidebar is rendered, so absence here is real absence.
+    const listed = await kindButton.isVisible().catch(() => false);
+    expect
+      .soft(listed, `the Resources sidebar offers no ${kind} entry, though the fixture creates one`)
+      .toBe(true);
+    if (!listed) continue;
+
+    await kindButton.click();
+    const table = page.getByRole('table').first();
+    await expect.soft(table, `${kind}: no table rendered after selecting the kind`).toBeVisible({ timeout: 20_000 });
+
+    const row = table.getByRole('row').filter({ hasText: name }).first();
+    // Same reasoning: wait for the row rather than sampling instantly.
+    const found = await expect(row)
+      .toBeVisible({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    expect
+      .soft(found, `${kind}: no row for ${FIXTURE_NS}/${name}, which kubectl confirms exists`)
+      .toBe(true);
+    if (!found) continue;
+
+    await row.click();
+
+    // The drawer names the resource it opened for. Without this a drawer that
+    // opens on the wrong row - or keeps the previous kind's content - looks
+    // completely healthy.
+    await expect
+      .soft(
+        page.getByRole('heading', { name: new RegExp(`^${name}$`) }).first(),
+        `${kind}: the drawer did not open on ${name} - it may have opened the wrong resource or kept the previous one`,
+      )
+      .toBeVisible({ timeout: 20_000 });
+
+    await expect
+      .soft(
+        page.getByText(/something went wrong|failed to load|unable to load/i).first(),
+        `${kind}: the drawer rendered an error state for ${name}`,
+      )
+      .toBeHidden({ timeout: 10_000 });
+
+    await captureSurface(page, testInfo, `resource-drawer-${kind.toLowerCase()}`);
+
+    // Close before the next kind: an open drawer adds its own buttons and
+    // headings to the page, which is exactly what made the Scale selector in
+    // write-actions ambiguous.
+    await page.keyboard.press('Escape');
+  }
+});
