@@ -14,7 +14,12 @@ export default defineConfig({
   // Playwright reports a test that needed the retry as flaky, and the gallery
   // shows that count, so nothing is hidden.
   retries: process.env.CI ? 1 : 0,
-  workers: 1,
+  // One by default: most scenarios share a hub, and several specs mutate state
+  // that others read - triage records, view filters, the fixture workloads. A
+  // scenario whose specs are genuinely independent can raise this per job with
+  // PW_WORKERS; the journey scenario does, because its three journeys touch
+  // different objects entirely.
+  workers: Number(process.env.PW_WORKERS ?? 1),
   // The HTML report carries the attachments (matched events, timeline
   // screenshot), so CI produces it on success too - a scheduled run that only
   // reports on failure never shows anyone that the timeline actually rendered.

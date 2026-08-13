@@ -183,43 +183,47 @@ test('a workload that breaks is detected and can be found everywhere the operato
     { path: '/resources', label: 'resources', why: 'the pod stuck pulling its image is not in the resource table' },
   ];
 
-  for (const { path, label, why } of surfaces) {
-    await gotoWhenNotRateLimited(page, path);
+  // Checked in parallel, one tab per surface. These are four independent
+  // reads of the same fact, and doing them one after another spends the sum of
+  // four page loads to learn nothing extra. They share the signed-in context,
+  // so no extra authentication is involved.
+  const results = await Promise.all(
+    surfaces.map(async ({ path, label, why }) => {
+      const tab = await page.context().newPage();
+      try {
+        await gotoWhenNotRateLimited(tab, path);
 
-    // Resources defaults to Pods and paginates, so the workload is searched
-    // for by name rather than expected to be on screen already.
-    if (path === '/resources') {
-      const search = page.getByPlaceholder('Search... (press /)').first();
-      if (await search.count()) {
-        await search.fill(WORKLOAD);
-        await page.waitForTimeout(3000);
+        // Resources defaults to Pods and paginates, so the workload is
+        // searched for by name rather than expected to be on screen already.
+        if (path === '/resources') {
+          const search = tab.getByPlaceholder('Search... (press /)').first();
+          if (await search.count()) {
+            await search.fill(WORKLOAD);
+            await tab.waitForTimeout(3000);
+          }
+        }
+
+        const found = await expect
+          .poll(async () => (await tab.evaluate(() => document.body.innerText)).includes(WORKLOAD), {
+            timeout: 45_000,
+            intervals: [2000, 3000, 5000],
+          })
+          .toBe(true)
+          .then(() => true)
+          .catch(() => false);
+
+        await captureSurface(tab, testInfo, `journey-broken-on-${label}`);
+        return { found, path, why };
+      } finally {
+        await tab.close();
       }
-    }
+    }),
+  );
 
-    const found = await expect
-      .poll(async () => (await bodyText(page)).includes(WORKLOAD), { timeout: 45_000, intervals: [2000, 3000, 5000] })
-      .toBe(true)
-      .then(() => true)
-      .catch(() => false);
-
+  for (const { found, path, why } of results) {
     expect.soft(found, `${path}: ${why}`).toBe(true);
-    await captureSurface(page, testInfo, `journey-broken-on-${label}`);
   }
 
-  // Whether anyone who is NOT looking at the page gets told is recorded, not
-  // demanded.
-  //
-  // On a fresh cluster nothing reached the inbox within three minutes, on both
-  // variants. That is not established as a defect: notifications come from an
-  // alert rule, the harness runs rules on a 60s +/- 15s poll, and whether a
-  // freshly created org has a default rule that notifies at all is not
-  // something this repo establishes. Asserting it would file a defect this
-  // suite has not verified - the same reason the drawer's missing NEXT STEP is
-  // recorded rather than failed.
-  //
-  // Both layers are recorded separately, because they fail differently: an
-  // alert instance that never opens is a rule problem, and an instance that
-  // opens without a notification is a delivery problem.
   // With the baseline confirmed, a critical issue raised afterwards MUST reach
   // the inbox: the default rule is enabled, filters on critical, and has inbox
   // delivery on.

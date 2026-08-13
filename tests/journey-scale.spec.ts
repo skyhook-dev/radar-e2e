@@ -94,6 +94,11 @@ async function waitForReady(count: number) {
     .toBe(count);
 }
 
+/** How many pods the cluster has right now, across all namespaces. */
+function clusterPods(): number {
+  return kubectl('get', 'pods', '-A', '--no-headers', '-o', 'name').split('\n').filter(Boolean).length;
+}
+
 /** Fleet-wide Pod count as topology prints it in its kind legend. */
 async function topologyPods(page: Page): Promise<number | null> {
   const m = (await bodyText(page)).match(/Pod\s*\n?\s*(\d+)/);
@@ -166,20 +171,30 @@ test('scaling a workload up is reflected on every surface that describes it', as
     .toBe(SCALE_TO);
   await captureSurface(page, testInfo, 'journey-scale-resources');
 
-  // Topology: the fleet-wide pod total has to move by exactly what was added.
+  // Topology: compared with what the cluster has RIGHT NOW, not with a
+  // remembered number plus this test's delta. The fleet-wide pod count is
+  // shared - anything else running against this hub moves it too - so
+  // "before + 2" is only correct when nothing else is happening, and it fails
+  // for the wrong reason when something is.
   if (podsBefore !== null) {
     await gotoWhenNotRateLimited(page, '/topology');
-    const expected = podsBefore + (SCALE_TO - original);
     const moved = await expect
-      .poll(async () => topologyPods(page), { timeout: 90_000, intervals: [3000, 5000] })
-      .toBe(expected)
+      .poll(
+        async () => {
+          const shown = await topologyPods(page);
+          const actual = clusterPods();
+          return shown !== null && shown === actual;
+        },
+        { timeout: 90_000, intervals: [3000, 5000] },
+      )
+      .toBe(true)
       .then(() => true)
       .catch(() => false);
     expect
       .soft(
         moved,
-        `topology counted ${podsBefore} pods before ${WORKLOAD} was scaled from ${original} to ${SCALE_TO}, ` +
-          `so it should now count ${expected} - the graph is not tracking the cluster`,
+        `topology counts ${await topologyPods(page)} pods where the cluster has ${clusterPods()} after ` +
+          `${WORKLOAD} was scaled from ${original} to ${SCALE_TO} - the graph is not tracking the cluster`,
       )
       .toBe(true);
     await captureSurface(page, testInfo, 'journey-scale-topology');

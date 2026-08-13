@@ -233,6 +233,10 @@ jobs:
           # underneath them.
           - scenario: journey
             specs: tests/journey-broken-workload.spec.ts tests/journey-expiring-cert.spec.ts tests/journey-scale.spec.ts
+            # These three journeys touch entirely different objects - a broken
+            # deployment, a TLS secret, and storefront's replica count - so they
+            # can run at once instead of one after another.
+            workers: 3
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
@@ -320,6 +324,7 @@ jobs:
           CLUSTER: e2e-${{ matrix.scenario }}
           SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
+          PW_WORKERS: ${{ matrix.workers || 1 }}
         run: ./run.sh all
 
       # CLUSTER has to be passed here too. Without it run.sh falls back to its
@@ -397,6 +402,10 @@ jobs:
           # underneath them.
           - scenario: journey
             specs: tests/journey-broken-workload.spec.ts tests/journey-expiring-cert.spec.ts tests/journey-scale.spec.ts
+            # These three journeys touch entirely different objects - a broken
+            # deployment, a TLS secret, and storefront's replica count - so they
+            # can run at once instead of one after another.
+            workers: 3
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
@@ -476,6 +485,7 @@ jobs:
           CLUSTER: pub-${{ matrix.scenario }}
           SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
+          PW_WORKERS: ${{ matrix.workers || 1 }}
         run: ./run.sh all
 
       # CLUSTER has to be passed here too. Without it run.sh falls back to its
