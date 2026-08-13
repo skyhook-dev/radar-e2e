@@ -293,6 +293,58 @@ const DETAIL_FACTS: {
       return Object.keys(c.data ?? {}).map((k) => ({ what: `its key ${k}`, value: k }));
     },
   },
+  {
+    kind: 'StatefulSet',
+    resource: 'statefulset',
+    name: 'ledger',
+    facts: (sts) => {
+      const s = sts as {
+        spec: { replicas: number; serviceName?: string; template: { spec: { containers: { image: string }[] } } };
+      };
+      return [
+        { what: 'the image it runs', value: s.spec.template.spec.containers[0].image },
+        { what: 'its replica count', value: String(s.spec.replicas) },
+      ];
+    },
+  },
+  {
+    kind: 'DaemonSet',
+    resource: 'daemonset',
+    name: 'node-probe',
+    facts: (ds) => {
+      const d = ds as {
+        status: { desiredNumberScheduled: number };
+        spec: { template: { spec: { containers: { image: string }[] } } };
+      };
+      return [
+        { what: 'the image it runs', value: d.spec.template.spec.containers[0].image },
+        { what: 'how many nodes it is scheduled on', value: String(d.status.desiredNumberScheduled) },
+      ];
+    },
+  },
+  {
+    kind: 'CronJob',
+    resource: 'cronjob',
+    name: 'nightly-report',
+    facts: (cj) => {
+      const c = cj as { spec: { schedule: string } };
+      // The schedule is the whole point of a CronJob: a detail panel that
+      // omits it cannot answer "when does this run".
+      return [{ what: 'its schedule', value: c.spec.schedule }];
+    },
+  },
+  {
+    kind: 'HorizontalPodAutoscaler',
+    resource: 'hpa',
+    name: 'hpa-pinned',
+    facts: (hpa) => {
+      const h = hpa as { spec: { minReplicas: number; maxReplicas: number; scaleTargetRef: { name: string } } };
+      return [
+        { what: 'what it scales', value: h.spec.scaleTargetRef.name },
+        { what: 'its maximum replicas', value: String(h.spec.maxReplicas) },
+      ];
+    },
+  },
 ];
 
 for (const target of DETAIL_FACTS) {
@@ -316,13 +368,16 @@ for (const target of DETAIL_FACTS) {
       timeout: 45_000,
     });
 
-    const listOnly = await page.evaluate(() => document.body.innerText);
     await row.click();
 
-    // Detail-specific wait again: the name is already on screen in the row.
+    // Waits for a section only the detail renders. "the body text changed" is
+    // satisfied the moment the panel starts opening, so the assertions below
+    // ran against a half-rendered detail and reported fields as missing that
+    // arrive a second later - both the StatefulSet and DaemonSet images did
+    // exactly that.
     await expect
-      .poll(async () => (await page.evaluate(() => document.body.innerText)) !== listOnly, {
-        message: `clicking ${FIXTURE_NS}/${target.name} changed nothing on screen - no detail opened`,
+      .poll(async () => /Metadata|Pod Template|Related Resources/.test(await page.evaluate(() => document.body.innerText)), {
+        message: `clicking ${FIXTURE_NS}/${target.name} never opened a detail view`,
         timeout: 45_000,
         intervals: [1000, 2000, 3000],
       })
