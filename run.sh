@@ -427,29 +427,32 @@ dump_diagnostics() {
 }
 
 # Authenticated GETs against the running hub, dumped as JSON.
+#
+# Reuses the session Playwright already established rather than signing in
+# again: the product has no simple login endpoint to curl - the suite fills the
+# form - so an attempt to authenticate here silently failed and skipped every
+# dump. The storage state written during the run has the cookies.
 dump_hub_state() {
-  local jar="$DIR/.run/diag-cookies.txt"
-  rm -f "$jar"
-
-  # The diagnostics step does not carry the test step's credentials, so take
-  # the password the harness generated and stored during `up`. Without this the
-  # sign-in silently failed and the whole API dump was skipped - which is how a
-  # run reported "no notification" with no way to see whether the hub had even
-  # created one.
-  if [ -z "${E2E_ADMIN_PASSWORD:-}" ] && [ -s "$ADMIN_PASSWORD_FILE" ]; then
-    E2E_ADMIN_PASSWORD="$(cat "$ADMIN_PASSWORD_FILE")"
+  local state="$DIR/.run/auth.json"
+  if [ ! -s "$state" ]; then
+    echo "--- hub API state: no saved session at .run/auth.json, skipping"
+    return 0
   fi
-  E2E_ADMIN_EMAIL="${E2E_ADMIN_EMAIL:-e2e-admin@skyhook.io}"
 
-  if ! curl -sf -c "$jar" -X POST "$HUB_URL/api/auth/login" \
-      -H "content-type: application/json" \
-      -d "{\"email\":\"${E2E_ADMIN_EMAIL:-}\",\"password\":\"${E2E_ADMIN_PASSWORD:-}\"}" >/dev/null 2>&1; then
-    echo "--- hub API state: could not sign in, skipping"
+  local cookie
+  cookie="$(python3 - "$state" <<'PYEOF'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print("; ".join(f"{c['name']}={c['value']}" for c in state.get("cookies", [])))
+PYEOF
+)"
+  if [ -z "$cookie" ]; then
+    echo "--- hub API state: saved session carries no cookies, skipping"
     return 0
   fi
 
   local org
-  org="$(curl -sf -b "$jar" "$HUB_URL/api/orgs" 2>/dev/null \
+  org="$(curl -sf -H "Cookie: $cookie" "$HUB_URL/api/orgs" 2>/dev/null \
     | sed -n 's/.*"id":"\(org_[a-z0-9]*\)".*/\1/p' | head -1)"
 
   for path in \
@@ -462,11 +465,11 @@ dump_hub_state() {
   do
     [ -n "$path" ] || continue
     echo "--- GET ${path}"
-    curl -sf -b "$jar" "$HUB_URL$path" 2>&1 | head -c 4000 || true
+    curl -s -H "Cookie: $cookie" "$HUB_URL$path" 2>&1 | head -c 4000 || true
     echo
   done
-  rm -f "$jar"
 }
+
 
 down() {
   stop_port_forward
