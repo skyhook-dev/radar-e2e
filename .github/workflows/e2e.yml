@@ -228,7 +228,7 @@ jobs:
           # any test counting issues alongside it would see the count move
           # underneath them.
           - scenario: journey
-            specs: tests/journey-broken-workload.spec.ts
+            specs: tests/journey-broken-workload.spec.ts tests/journey-expiring-cert.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
@@ -379,7 +379,7 @@ jobs:
           # any test counting issues alongside it would see the count move
           # underneath them.
           - scenario: journey
-            specs: tests/journey-broken-workload.spec.ts
+            specs: tests/journey-broken-workload.spec.ts tests/journey-expiring-cert.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
