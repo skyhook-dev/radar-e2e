@@ -239,15 +239,37 @@ test('a workload that breaks is detected and can be found everywhere the operato
   });
 
   if (baselined && notifiable) {
-    await expect
+    // Given a longer budget on purpose. A hub minutes old produced nothing in
+    // four minutes while a hub that had been up for a day held hundreds, so
+    // "slower than four minutes here" and "never delivered" are the two
+    // candidates and they need separating. The elapsed time is recorded either
+    // way, so the answer is in the report rather than in someone's memory.
+    const started = Date.now();
+    const arrived = await expect
       .poll(async () => (await unreadNotifications(page)).length, {
-        message:
-          `${NAMESPACE}/${WORKLOAD} broke after the alert rule had demonstrably baselined this cluster, and ` +
-          `nothing reached the notification inbox - the only people who find out are the ones already looking`,
-        timeout: 240_000,
-        intervals: [5000, 10_000, 15_000],
+        timeout: 480_000,
+        intervals: [5000, 10_000, 15_000, 30_000],
       })
-      .toBeGreaterThan(0);
+      .toBeGreaterThan(0)
+      .then(() => true)
+      .catch(() => false);
+
+    const openInstances = await openAlertInstances(page);
+    testInfo.annotations.push({
+      type: 'notification',
+      description: arrived
+        ? `inbox notified after ${Math.round((Date.now() - started) / 1000)}s`
+        : `no notification after ${Math.round((Date.now() - started) / 1000)}s, with ${openInstances.length} open alert instance(s)`,
+    });
+
+    expect
+      .soft(
+        arrived,
+        `${NAMESPACE}/${WORKLOAD} is a critical issue raised after the rule demonstrably baselined this cluster, ` +
+          `the rule is enabled with inbox delivery on, and ${openInstances.length} alert instance(s) are open - ` +
+          `but nothing reached the notification inbox in eight minutes`,
+      )
+      .toBe(true);
   }
 
   const notifications = await unreadNotifications(page);
