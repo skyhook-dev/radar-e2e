@@ -4,6 +4,7 @@ import {
   authStatePath,
   captureSurface,
   clusterId,
+  kubectl,
   walkTabs,
   watchConsoleErrors,
 } from './helpers';
@@ -109,6 +110,34 @@ const KINDS: { path: string; name: string; what: string }[] = [
   { path: 'services', name: 'orphaned', what: 'a Service whose selector matches nothing' },
 ];
 
+/**
+ * One defining fact per kind, read from the cluster at run time.
+ *
+ * Walking the tabs proves they open; it does not prove the view is about this
+ * workload. These are the facts that would be wrong if it were showing another
+ * object, or a cached one - and they are read from the cluster rather than
+ * written down here, so they track the fixture instead of a copy of it.
+ */
+function truthFor(kindPath: string, name: string): { what: string; value: string }[] {
+  const singular = kindPath.replace(/s$/, '');
+  const object = JSON.parse(kubectl('get', singular, name, '-n', NS, '-o', 'json'));
+  switch (kindPath) {
+    case 'services': {
+      const ports = (object.spec.ports ?? []).map((p: { port: number }) => String(p.port));
+      return [
+        { what: 'its service type', value: object.spec.type },
+        ...ports.slice(0, 1).map((port: string) => ({ what: `the port it serves (${port})`, value: port })),
+      ];
+    }
+    case 'cronjobs':
+      return [{ what: 'its schedule', value: object.spec.schedule }];
+    case 'jobs':
+      return [{ what: 'the image it ran', value: object.spec.template.spec.containers[0].image }];
+    default:
+      return [{ what: 'the image it runs', value: object.spec.template.spec.containers[0].image }];
+  }
+}
+
 for (const kind of KINDS) {
   test(`every tab opens and renders for ${kind.what}`, async ({ page }, testInfo) => {
     const consoleErrors = watchConsoleErrors(page);
@@ -124,6 +153,31 @@ for (const kind of KINDS) {
       page.getByRole('heading', { name: new RegExp(kind.name, 'i') }).first(),
       `the detail view for ${kind.what} (${kind.path}/${kind.name}) never rendered its heading`,
     ).toBeVisible({ timeout: 30_000 });
+
+    // Before walking the tabs: is this view actually about this workload? A
+    // detail that opens, renders and offers every tab is still wrong if it is
+    // describing something else.
+    for (const fact of truthFor(kind.path, kind.name)) {
+      if (!fact.value) continue;
+      // Polled: the heading renders before the panel behind it does, so
+      // reading the body once here reports facts as missing that arrive a
+      // second later - it did exactly that for the StatefulSet and the Job.
+      const shown = await expect
+        .poll(async () => (await page.locator('body').innerText()).includes(fact.value), {
+          timeout: 45_000,
+          intervals: [1000, 2000, 3000, 5000],
+        })
+        .toBe(true)
+        .then(() => true)
+        .catch(() => false);
+      expect
+        .soft(
+          shown,
+          `the view for ${kind.what} does not show ${fact.what} (${fact.value}) - the tabs are there but the ` +
+            `content is not this workload's`,
+        )
+        .toBe(true);
+    }
 
     const { offered } = await walkTabs(page, testInfo, `${kind.path}-${kind.name}`);
 
