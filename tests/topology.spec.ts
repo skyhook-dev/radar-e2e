@@ -1,5 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited, kubectl } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  gotoWhenNotRateLimited,
+  kubectl,
+  waitForFleetReporting,
+} from './helpers';
 
 // Topology, held to the cluster it claims to be drawing.
 //
@@ -47,6 +54,9 @@ async function shownCounts(page: Page): Promise<{ kinds: Record<string, number>;
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await assertClusterConnected(page);
+  // Connected is not the same as answering: the hub can hold an attached agent
+  // that serves nothing, and every fleet-wide number then reads as zero.
+  await waitForFleetReporting(page);
 });
 
 test('the topology graph counts the resources this cluster actually has', async ({ page }, testInfo) => {

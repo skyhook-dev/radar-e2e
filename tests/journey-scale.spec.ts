@@ -1,5 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited, kubectl } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  gotoWhenNotRateLimited,
+  kubectl,
+  waitForFleetReporting,
+} from './helpers';
 
 // The most ordinary thing an operator does: change how many replicas run.
 //
@@ -118,6 +125,9 @@ test.afterAll(async () => {
 test('scaling a workload up is reflected on every surface that describes it', async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
+  // Connected is not the same as answering: the hub can hold an attached agent
+  // that serves nothing, and every fleet-wide number then reads as zero.
+  await waitForFleetReporting(page);
 
   expect(original, `${NAMESPACE}/${WORKLOAD} is not in this cluster, so there is nothing to scale`).toBeGreaterThan(0);
 

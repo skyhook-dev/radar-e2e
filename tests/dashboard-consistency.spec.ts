@@ -1,5 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  gotoWhenNotRateLimited,
+  waitForFleetReporting,
+} from './helpers';
 
 // The dashboard must agree with the pages it links to.
 //
@@ -67,6 +73,9 @@ const issueRows = (page: Page) =>
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await assertClusterConnected(page);
+  // Connected is not the same as answering: the hub can hold an attached agent
+  // that serves nothing, and every fleet-wide number then reads as zero.
+  await waitForFleetReporting(page);
 });
 
 test('the Issues card on the dashboard agrees with the Issues page it links to', async ({ page }, testInfo) => {
