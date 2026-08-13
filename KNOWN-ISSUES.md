@@ -373,3 +373,52 @@ The fixture cluster carries two pods that `kubectl get pods
 The Capacity page counts the first and not the second, which is correct: the
 second one's problem is a registry, not a node. A test that took the field
 selector's count as its expected value would report correct behaviour as a bug.
+
+## Alert rules baseline a cluster on their first poll
+
+An alert rule's first poll of a cluster records whatever is already broken
+without notifying about it. On a cluster created minutes ago - which is every CI
+job - all the fixture issues are baselined, so the notification inbox is
+legitimately empty.
+
+Any test that reasons "this cluster has issues, therefore something should have
+been notified" fails against a product doing exactly the right thing. Proving a
+notification is raised needs a problem created AFTER the baseline, which is what
+`journey-broken-workload` does.
+
+## The inbox endpoint returns unread items, one page at a time
+
+`GET /api/orgs/{id}/inbox` returns UNREAD notifications only, capped at 50. Two
+consequences for tests:
+
+- anything that marks notifications read empties it for everything after, so a
+  "mark all read" test and an "inbox has items" test cannot share a file without
+  ordering them deliberately
+- the bell's count and the API's length legitimately differ (117 unread against
+  a page of 50). Asserting they are equal fails on a correct product.
+
+## "unavailable" on a dashboard card can just mean rate limited
+
+The Checks card renders `Checks - unavailable` when its own request is rejected
+by the fleet budget, and nothing else on the page says a 429 happened. A test
+that treats that as "the dashboard is under-reporting" reports a working product
+as broken; given a fresh load and a recovered budget the card fills in normally.
+
+Only a card that stays unavailable while the page behind it serves data is worth
+reporting, because that is the state that would mislead an operator.
+
+## Observed, not filed
+
+Two things this suite records per run rather than asserting, because nothing
+here establishes what the product intends. Both are visible in the run's
+annotations, and both are questions for whoever owns the feature:
+
+- **The "Workload degraded" drawer carries no NEXT STEP** where the image-pull
+  and unschedulable drawers both do. If every issue type is meant to offer
+  guidance, this is a gap; if some are informational, it is not.
+- **A workload broken well after the alert baseline raised no notification
+  within three minutes**, on both variants. The alert poll runs every 60s +/-
+  15s, so the timing allows for it - but whether a freshly created org has a
+  default rule that notifies at all is not established here. The journey records
+  how many rules, open instances and notifications existed at each step, which
+  is what is needed to tell a rule problem from a delivery problem.
