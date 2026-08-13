@@ -414,8 +414,13 @@ here establishes what the product intends. Both are visible in the run's
 annotations, and both are questions for whoever owns the feature:
 
 - **The "Workload degraded" drawer carries no NEXT STEP** where the image-pull
-  and unschedulable drawers both do. If every issue type is meant to offer
-  guidance, this is a gap; if some are informational, it is not.
+  and unschedulable drawers both do. Not a rendering fault: in radar's issue
+  view the field is optional (`nextStep?: ReactNode`) and supplied per issue
+  source, so the panel shows guidance when the issue carries it and this issue
+  type does not. Whether it SHOULD is a content decision for whoever owns the
+  issue catalogue, not something this suite can settle - so presence is
+  recorded per issue as a test annotation, and the only assertion is that
+  guidance has not disappeared from every drawer at once.
 - ~~A workload broken after the alert baseline raised no notification~~
   **RESOLVED, and it was the test.** The org does have a default rule
   ("Notify on critical issues", enabled, filtering severity=critical, with
