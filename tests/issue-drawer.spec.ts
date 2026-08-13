@@ -43,6 +43,18 @@ const drawerOpen = (page: Page) => page.evaluate((m) => document.body.innerText.
 const issueRows = (page: Page) =>
   page.locator('[role=button]').filter({ has: page.locator('button[aria-label^="Dismiss" i]') });
 
+type FleetIssue = { kind: string; name: string; namespace: string; severity: string; reason?: string; category?: string };
+
+/** What the hub itself says is wrong, so the drawer can be held to it. */
+async function fleetIssues(page: Page): Promise<FleetIssue[]> {
+  return page
+    .evaluate(async () => {
+      const res = await fetch('/api/fleet/issues');
+      return res.ok ? ((await res.json()).issues ?? []) : [];
+    })
+    .catch(() => []);
+}
+
 /** Everything the drawer says, from its first heading onwards. */
 async function drawerText(page: Page): Promise<string> {
   return page.evaluate((m) => {
@@ -93,6 +105,10 @@ test('the issue drawer explains the issue it was opened from, and differs from o
 
   const seen: { title: string; text: string }[] = [];
   const withoutNextStep: string[] = [];
+  const issues = await fleetIssues(page);
+  expect
+    .soft(issues.length, 'the hub reports no issues, so the drawers cannot be checked against anything')
+    .toBeGreaterThan(0);
 
   for (let i = 0; i < sample; i++) {
     const row = rows.nth(i);
@@ -102,6 +118,36 @@ test('the issue drawer explains the issue it was opened from, and differs from o
 
     await openDrawer(page, row);
     const text = await drawerText(page);
+
+    // The drawer must say what the HUB says is wrong with this resource, not
+    // merely something plausible about it. The record behind the row is the
+    // reference: a panel that renders a generic explanation for a specific
+    // failure is worse than an empty one, because it is acted on.
+    const record = issues.find((i) => i.name === subject);
+    if (record?.reason) {
+      // Compared on the distinctive part of the reason. The drawer rephrases
+      // it - "cannot-scale - FailedGetResourceMetric ..." on the row becomes
+      // "The resource metrics API is unavailable" in the panel - so the whole
+      // sentence is not expected to survive, but the specific term is.
+      const term = (record.reason.match(/[A-Z][a-zA-Z]{6,}|[a-z]+(?:BackOff|Failed|Error)/) ?? [])[0];
+      if (term) {
+        expect
+          .soft(
+            text,
+            `the hub records "${record.reason}" for ${subject}, but the drawer never mentions ${term} - ` +
+              `the panel is explaining something other than the recorded failure`,
+          )
+          .toContain(term);
+      }
+    }
+    if (record?.severity) {
+      expect
+        .soft(
+          text.toLowerCase(),
+          `the hub records ${subject} as ${record.severity}, but the drawer does not say so`,
+        )
+        .toContain(record.severity.toLowerCase());
+    }
 
     // It has to be about the resource the operator clicked on.
     if (subject) {
