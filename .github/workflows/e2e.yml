@@ -215,7 +215,7 @@ jobs:
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
+            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
             specs: tests/helm.spec.ts tests/helm-actions.spec.ts
           # Topology, Capacity, Traffic and Cost. Kept together and away from
@@ -366,7 +366,7 @@ jobs:
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
+            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
             specs: tests/helm.spec.ts tests/helm-actions.spec.ts
           # Topology, Capacity, Traffic and Cost. Kept together and away from
