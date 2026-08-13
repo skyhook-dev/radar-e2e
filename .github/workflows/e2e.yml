@@ -213,7 +213,7 @@ jobs:
           - scenario: shell
             specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
           - scenario: workloads
-            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
+            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/resource-inventory.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
             specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
@@ -377,7 +377,7 @@ jobs:
           - scenario: shell
             specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
           - scenario: workloads
-            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
+            specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/resource-inventory.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
             specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
