@@ -211,7 +211,7 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
@@ -375,7 +375,7 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
