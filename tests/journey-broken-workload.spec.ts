@@ -148,8 +148,16 @@ test('a workload that breaks is detected and can be found everywhere the operato
 
   // Detection first: without this, every surface check below would be
   // reporting the same single fact and none of them would mean anything.
+  // Captured inside the poll, not re-fetched after it. A pod that has just
+  // failed to pull flaps between ErrImagePull and ImagePullBackOff, and the
+  // issue can be absent for a moment - so reading it again after the poll
+  // succeeded crashed on undefined.
+  let detected: FleetIssue | undefined;
   await expect
-    .poll(async () => Boolean(ours(await fleetIssues(page))), {
+    .poll(async () => {
+      detected = ours(await fleetIssues(page));
+      return Boolean(detected);
+    }, {
       message:
         `${NAMESPACE}/${WORKLOAD} was created with an image that cannot be pulled, but no issue for it ever ` +
         `reached /api/fleet/issues - either radar did not detect it or the fan-out to the hub is broken`,
@@ -158,7 +166,7 @@ test('a workload that breaks is detected and can be found everywhere the operato
     })
     .toBe(true);
 
-  const issue = ours(await fleetIssues(page)) as FleetIssue;
+  const issue = detected as FleetIssue;
   expect
     .soft(issue.cluster_id, 'the issue is not attributed to the cluster it came from')
     .toBe(clusterId);
@@ -203,10 +211,14 @@ test('a workload that breaks is detected and can be found everywhere the operato
           }
         }
 
+        // Longer than the sequential version needed. Four tabs at once spend
+        // the fleet request budget four times as fast, so a tab can lose its
+        // turn and have to wait the limit out before it sees anything - which
+        // is not the page failing to list the workload.
         const found = await expect
           .poll(async () => (await tab.evaluate(() => document.body.innerText)).includes(WORKLOAD), {
-            timeout: 45_000,
-            intervals: [2000, 3000, 5000],
+            timeout: 120_000,
+            intervals: [2000, 3000, 5000, 10_000],
           })
           .toBe(true)
           .then(() => true)
@@ -373,8 +385,16 @@ test('fixing the workload clears the issue from the API, the queue and the dashb
     .toBe('1');
 
   // Now the product must withdraw what it raised.
+  // Captured inside the poll, not re-fetched after it. A pod that has just
+  // failed to pull flaps between ErrImagePull and ImagePullBackOff, and the
+  // issue can be absent for a moment - so reading it again after the poll
+  // succeeded crashed on undefined.
+  let detected: FleetIssue | undefined;
   await expect
-    .poll(async () => Boolean(ours(await fleetIssues(page))), {
+    .poll(async () => {
+      detected = ours(await fleetIssues(page));
+      return Boolean(detected);
+    }, {
       message:
         `${NAMESPACE}/${WORKLOAD} is running and healthy, but the hub still reports an issue for it - ` +
         `an alert that never clears is one users learn to ignore`,
