@@ -52,6 +52,20 @@ function applicationRow(page: Page, appName: string) {
   return page.locator('tbody tr').filter({ hasText: appName }).first();
 }
 
+/**
+ * The ready count on that row as a pair, e.g. "2/2" -> [2, 2].
+ *
+ * Parsed rather than substring-matched. Scaling down passes through states
+ * like 4/2 and 2/4 while pods terminate, and a substring check for "2/2"
+ * cannot tell "not there yet" from "wrong", so it reports a page that is
+ * mid-update as a page that never updates.
+ */
+async function readyPair(page: Page, appName: string): Promise<[number, number] | null> {
+  const text = await applicationRow(page, appName).innerText().catch(() => '');
+  const m = text.match(/(\d+)\s*\/\s*(\d+)/);
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
 function desiredReplicas(): number {
@@ -170,20 +184,25 @@ test('scaling back down is reflected just as quickly', async ({ page }, testInfo
   await waitForReady(original);
 
   const appName = applicationName();
-  await gotoWhenNotRateLimited(page, '/applications');
   const backDown = await expect
-    .poll(async () => applicationRow(page, appName).innerText().catch(() => ''), {
-      timeout: 90_000,
-      intervals: [3000, 5000],
-    })
-    .toContain(`${original}/${original}`)
+    .poll(
+      async () => {
+        // Reloaded each time: coming down is slower than going up, because the
+        // page keeps counting pods until they finish terminating.
+        await gotoWhenNotRateLimited(page, '/applications');
+        return (await readyPair(page, appName))?.join('/') ?? '';
+      },
+      { timeout: 240_000, intervals: [5000, 10_000, 15_000] },
+    )
+    .toBe(`${original}/${original}`)
     .then(() => true)
     .catch(() => false);
   expect
     .soft(
       backDown,
-      `${WORKLOAD} is back to ${original} replicas but the "${appName}" row never showed ${original}/${original} - ` +
-        `surfaces that only grow are how stale counts survive`,
+      `${WORKLOAD} is back to ${original} replicas but the "${appName}" row still reads ` +
+        `${(await readyPair(page, appName))?.join('/') ?? 'nothing'} - surfaces that only grow are how stale ` +
+        `counts survive`,
     )
     .toBe(true);
 
