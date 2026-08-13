@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface } from './helpers';
+import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited } from './helpers';
 
 // The controls each domain page offers, actually exercised.
 //
@@ -86,7 +86,7 @@ test('every domain search box actually filters what it shows', async ({ page }, 
   await assertClusterConnected(page);
 
   for (const { path, domain, search, term } of SEARCHABLE) {
-    await page.goto(path);
+    await gotoWhenNotRateLimited(page, path);
 
     const box = await searchBox(page, search);
     // toBeVisible, not isVisible: the latter answers "right now" and the page
@@ -180,7 +180,7 @@ test('the state filters on a domain page change what it shows', async ({ page },
   await assertClusterConnected(page);
 
   for (const { path, domain, tabs } of STATE_TABS) {
-    await page.goto(path);
+    await gotoWhenNotRateLimited(page, path);
     await expect
       .poll(async () => (await page.locator('body').innerText()).trim().length, {
         message: `${path}: never rendered`,
@@ -292,7 +292,7 @@ test('the controls on a domain page do something when clicked', async ({ page },
     for (const name of controls) {
       // Fresh load per control: several of these are toggles, and leaving one
       // engaged changes what the next one starts from.
-      await page.goto(path);
+      await gotoWhenNotRateLimited(page, path);
       await expect
         .poll(async () => (await page.locator('body').innerText()).trim().length, {
           message: `${path}: never rendered`,
@@ -311,17 +311,44 @@ test('the controls on a domain page do something when clicked', async ({ page },
         .toBe(true);
       if (!there) continue;
 
-      const before = (await page.locator('body').innerText()).trim();
-      await control.click();
+      const body = async () => (await page.locator('body').innerText()).trim();
+      const changedFrom = async (snapshot: string, timeout: number) =>
+        expect
+          .poll(async () => (await body()) !== snapshot, { timeout, intervals: [500, 1000, 2000] })
+          .toBe(true)
+          .then(() => true)
+          .catch(() => false);
 
-      await expect
-        .poll(async () => (await page.locator('body').innerText()).trim() !== before, {
-          message:
-            `${path}: clicking "${name}" on the ${domain} page changed nothing on screen - ` +
-            `the control is inert, whatever it was meant to do`,
-          timeout: 20_000,
-          intervals: [500, 1000, 2000],
-        })
+      const before = await body();
+      await control.click();
+      let responded = await changedFrom(before, 12_000);
+
+      // A control that is ALREADY the current view correctly does nothing when
+      // clicked - /helm opens on "Installed", and this tab strip exposes no
+      // aria-selected for a test to notice that. So before calling anything
+      // inert, switch to a sibling control and come back: if the view moves
+      // both ways, the control works and was simply already active.
+      if (!responded) {
+        const sibling = controls.find((c) => c !== name);
+        if (sibling) {
+          const other = page.getByRole('button', { name: new RegExp(`^\\s*${sibling}\\b`, 'i') }).first();
+          if (await other.count()) {
+            const parked = await body();
+            await other.click();
+            const movedAway = await changedFrom(parked, 12_000);
+            const elsewhere = await body();
+            await control.click();
+            responded = movedAway && (await changedFrom(elsewhere, 12_000));
+          }
+        }
+      }
+
+      expect
+        .soft(
+          responded,
+          `${path}: clicking "${name}" on the ${domain} page changed nothing on screen, and it does not ` +
+            `come back when switched away and reselected - the control is inert, whatever it was meant to do`,
+        )
         .toBe(true);
 
       await expect

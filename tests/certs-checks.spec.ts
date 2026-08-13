@@ -198,7 +198,13 @@ test.describe('Certs', () => {
 
     const table = page.getByRole('table');
     const row = table.getByRole('row').filter({ hasText: secretName });
-    await expect(row, `no row for cert secret ${secretName} on /certs`).toBeVisible();
+    // Longer than the 15s default on purpose. The API poll above has already
+    // proved the cert is in /api/fleet/certs, so what is left is the page's own
+    // fanout - which has its own short-TTL cache in front of it - plus the
+    // search debounce. Under a full domain run this took longer than 15s and
+    // failed with "no row", which reads as the page not showing a cert the API
+    // is serving.
+    await expect(row, `no row for cert secret ${secretName} on /certs`).toBeVisible({ timeout: 60_000 });
     await expect(row, 'row must show the namespace the secret actually lives in').toContainText(CERTS_NAMESPACE);
     await expect(row, 'row must tag the cert as a raw TLS secret, not cert-manager').toContainText('TLS secret');
 

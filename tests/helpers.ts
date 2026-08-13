@@ -20,14 +20,34 @@ const kubeContext = process.env.KUBE_CONTEXT ?? '';
  * would pass against a stale store and prove nothing about the live path.
  */
 export function kubectl(...args: string[]): string {
-  const base = kubeContext ? ['--context', kubeContext] : [];
-  return execFileSync('kubectl', [...base, ...args], { encoding: 'utf8' }).trim();
+  requireKubeContext();
+  return execFileSync('kubectl', ['--context', kubeContext, ...args], { encoding: 'utf8' }).trim();
+}
+
+/**
+ * Refuse to touch a cluster nobody named.
+ *
+ * These specs CREATE things - namespaces, broken deployments, TLS secrets -
+ * and without an explicit context kubectl uses whatever happens to be current.
+ * That is not hypothetical: a parallel piece of work switched the current
+ * context to its own kind cluster mid-run, and this suite went and created its
+ * fixture namespace in someone else's cluster while every browser assertion
+ * carried on passing against the right hub. run.sh always sets KUBE_CONTEXT;
+ * an ad-hoc `npx playwright test` does not.
+ */
+function requireKubeContext() {
+  if (!kubeContext) {
+    throw new Error(
+      'KUBE_CONTEXT is not set. These specs create resources in a cluster - refusing to use whatever ' +
+        'kubectl context happens to be current. Run through run.sh, or set KUBE_CONTEXT explicitly.',
+    );
+  }
 }
 
 /** Same idea for helm: the expected releases come from the cluster, not a fixture. */
 export function helm(...args: string[]): string {
-  const base = kubeContext ? ['--kube-context', kubeContext] : [];
-  return execFileSync('helm', [...base, ...args], { encoding: 'utf8' }).trim();
+  requireKubeContext();
+  return execFileSync('helm', ['--kube-context', kubeContext, ...args], { encoding: 'utf8' }).trim();
 }
 
 export type HelmRelease = { name: string; namespace: string; chart: string; status: string };
@@ -259,4 +279,43 @@ export async function walkTabs(
   }
 
   return { rendered, offered };
+}
+
+/**
+ * Navigate to a page and wait until it has actually loaded its data.
+ *
+ * The hub's fleet endpoints share a per-user budget (30/min). A run that walks
+ * several domains in a row exhausts it, and the pages then render an explicit
+ * error - "Failed to load checks: Too Many Requests" - instead of their
+ * content. In that state the page's own controls are genuinely absent, so any
+ * assertion about them reports a missing feature when the truth is that the
+ * test asked too often. The product is behaving correctly; the test has to
+ * wait its turn.
+ *
+ * Reloads rather than just polling: the page fetches once on mount and the
+ * error is terminal for that render.
+ */
+export async function gotoWhenNotRateLimited(page: Page, path: string, timeout = 120_000) {
+  const deadline = Date.now() + timeout;
+  const rateLimited = async () =>
+    /Too Many Requests|rate limit/i.test(await page.evaluate(() => document.body.innerText).catch(() => ''));
+
+  await page.goto(path);
+  for (;;) {
+    // Checked twice, a beat apart. A page can render its shell cleanly and
+    // only then have one of its own fetches come back 429, so a single check
+    // straight after navigation clears a page that is about to show an error.
+    if (!(await rateLimited())) {
+      await page.waitForTimeout(2000);
+      if (!(await rateLimited())) return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${path} was still rate limited after ${Math.round(timeout / 1000)}s - the fleet endpoints never ` +
+          `served this page, so nothing on it can be judged`,
+      );
+    }
+    await page.waitForTimeout(5000);
+    await page.reload();
+  }
 }

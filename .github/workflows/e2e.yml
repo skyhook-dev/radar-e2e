@@ -211,13 +211,19 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: tests/issues.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
+            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
             specs: tests/helm.spec.ts tests/helm-actions.spec.ts
+          # Topology, Capacity, Traffic and Cost. Kept together and away from
+          # the shell job because two of them CHANGE the cluster to prove the
+          # pages track it - topology creates a Deployment, capacity scales the
+          # unschedulable fixture away and back.
+          - scenario: observability
+            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
@@ -351,13 +357,19 @@ jobs:
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
           - scenario: shell
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
           - scenario: workloads
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
-            specs: tests/issues.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
+            specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
           - scenario: helm
             specs: tests/helm.spec.ts tests/helm-actions.spec.ts
+          # Topology, Capacity, Traffic and Cost. Kept together and away from
+          # the shell job because two of them CHANGE the cluster to prove the
+          # pages track it - topology creates a Deployment, capacity scales the
+          # unschedulable fixture away and back.
+          - scenario: observability
+            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin

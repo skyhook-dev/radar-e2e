@@ -22,6 +22,11 @@ const WORKLOAD_NAME = `e2e-broken-${Date.now()}`;
 
 let createdAt = 0;
 
+// The detection poll below is allowed up to 120s, which the 60s default test
+// timeout would cut short - the test would die before its own poll could give
+// the honest verdict.
+test.setTimeout(240_000);
+
 test.beforeAll(() => {
   if (!clusterId) throw new Error('CLUSTER_ID must be set - run through e2e/browser/run.sh');
   ensureNamespace();
@@ -149,8 +154,14 @@ test('a broken workload is detected and surfaces on the fleet Issues page, attri
       },
       {
         message: `no issue for ${NAMESPACE}/${WORKLOAD_NAME} appeared on /api/fleet/issues - the image-pull failure was never detected, or the radar -> hub issues fan-out is broken`,
-        timeout: 45_000,
-        intervals: [2000, 2000, 3000, 3000, 5000],
+        // Detection is normally well under 15s, but this waits on kubelet
+        // giving up on a registry pull before radar has anything to report,
+        // and a loaded machine running a whole domain's specs pushed that past
+        // the old 45s budget - which surfaced as "the fan-out is broken" on a
+        // fan-out that was working. Still a real assertion: nothing legitimate
+        // takes two minutes to notice a pull failure.
+        timeout: 120_000,
+        intervals: [2000, 2000, 3000, 3000, 5000, 5000, 10_000],
       },
     )
     .toBe(true);
