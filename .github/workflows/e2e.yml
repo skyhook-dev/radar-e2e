@@ -224,6 +224,11 @@ jobs:
           # unschedulable fixture away and back.
           - scenario: observability
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
+          # Its own cluster: this one RAISES an issue and then resolves it, so
+          # any test counting issues alongside it would see the count move
+          # underneath them.
+          - scenario: journey
+            specs: tests/journey-broken-workload.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
@@ -370,6 +375,11 @@ jobs:
           # unschedulable fixture away and back.
           - scenario: observability
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
+          # Its own cluster: this one RAISES an issue and then resolves it, so
+          # any test counting issues alongside it would see the count move
+          # underneath them.
+          - scenario: journey
+            specs: tests/journey-broken-workload.spec.ts
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
