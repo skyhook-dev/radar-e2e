@@ -46,8 +46,14 @@ Each scenario runs as its own CI job with its own cluster - created fresh for
 that job and thrown away after - so they finish in the time of the slowest
 rather than the sum, and a wedged cluster cannot take the others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
 
-13 scenarios, 99 tests, each scenario run twice - once against a hub built from
+13 scenarios, 116 tests, each scenario run twice - once against a hub built from
 main and once against the published release.
+
+Where a surface makes a claim about the cluster, the claim is checked against
+the cluster: resource counts and detail fields against `kubectl get`, Helm tabs
+against `helm get values/manifest/history`, the Clusters table and the
+organisation pages against the hub's own API. "The panel opened" is not
+evidence that anything in it is true.
 
 | Scenario | What it proves |
 |---|---|
