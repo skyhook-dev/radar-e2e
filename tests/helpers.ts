@@ -341,3 +341,36 @@ export async function dashboardCardText(page: Page, href: string): Promise<strin
     return cards.map((e) => (e as HTMLElement).innerText.trim()).sort((a, b) => b.length - a.length)[0];
   }, href);
 }
+
+/**
+ * Wait until the fleet endpoints actually have a cluster answering them.
+ *
+ * The hub can report a cluster as connected while its fleet queries still come
+ * back with nothing - the agent is attached but not answering, which the UI
+ * states plainly: "No clusters reporting - No cluster answered the issues
+ * query - a coverage gap, not a clean bill of health".
+ *
+ * Every fleet-wide feature looks broken in that state. Fleet search returns
+ * "No resources match", the dashboard cards empty out, and a test asserting on
+ * them reports a product defect when the truth is that nothing was asked.
+ * This distinguishes the two, so the failure names the real cause.
+ */
+export async function waitForFleetReporting(page: Page, timeout = 120_000) {
+  const deadline = Date.now() + timeout;
+  const notReporting = async () =>
+    /no clusters reporting|no cluster answered/i.test(
+      await page.evaluate(() => document.body.innerText).catch(() => ''),
+    );
+
+  for (;;) {
+    if (!(await notReporting())) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `no cluster answered the fleet queries after ${Math.round(timeout / 1000)}s - the agent is attached but ` +
+          `not serving, so nothing fleet-wide can be judged here`,
+      );
+    }
+    await page.waitForTimeout(5000);
+    await page.reload();
+  }
+}
