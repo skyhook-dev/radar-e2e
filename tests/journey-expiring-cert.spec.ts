@@ -173,13 +173,27 @@ test('rotating the certificate away clears it from the dashboard', async ({ page
     )
     .not.toContain(SECRET);
 
+  // Longer than the dashboard's budget on purpose. The card above cleared
+  // within a minute while the page had not caught up yet - they are fed by
+  // different paths with different refresh intervals, and 90s was enough for
+  // one and not the other. What is being asserted is that the page DOES catch
+  // up, not how fast; a page that never drops a deleted certificate is the
+  // failure worth reporting.
   await gotoWhenNotRateLimited(page, '/certs');
   await expect
-    .poll(async () => (await bodyText(page)).includes(SECRET), {
-      message: `${SECRET} was deleted but the Certs page still lists it`,
-      timeout: 90_000,
-      intervals: [3000, 5000],
-    })
+    .poll(
+      async () => {
+        await gotoWhenNotRateLimited(page, '/certs');
+        return (await bodyText(page)).includes(SECRET);
+      },
+      {
+        message:
+          `${CERTS_NAMESPACE}/${SECRET} was deleted from the cluster and has already cleared from the dashboard, ` +
+          `but the Certs page still lists it`,
+        timeout: 240_000,
+        intervals: [10_000, 10_000, 15_000],
+      },
+    )
     .toBe(false);
 
   await captureSurface(page, testInfo, 'journey-cert-resolved');

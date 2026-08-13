@@ -178,14 +178,12 @@ test('fixing the workload clears the issue from the API, the queue and the dashb
   await assertClusterConnected(page);
 
   // The fix an operator would actually apply: point it at an image that exists.
-  kubectl(
-    'set',
-    'image',
-    `deployment/${WORKLOAD}`,
-    `${WORKLOAD}=${GOOD_IMAGE}`,
-    '-n',
-    NAMESPACE,
-  );
+  //
+  // Targets every container with `*=`, not `<workload>=`. `kubectl create
+  // deployment X --image=registry.k8s.io/pause:tag` names the container after
+  // the IMAGE - "pause" - not after the deployment, so naming the container
+  // after the workload fails with "unable to find container named ...".
+  kubectl('set', 'image', `deployment/${WORKLOAD}`, `*=${GOOD_IMAGE}`, '-n', NAMESPACE);
 
   // The pod has to actually come up first - otherwise this is asserting on the
   // product while the cluster is still mid-rollout, and a failure here would
