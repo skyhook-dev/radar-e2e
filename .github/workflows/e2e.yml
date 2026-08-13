@@ -236,7 +236,7 @@ jobs:
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
-            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/onboarding.spec.ts
+            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
             specs: tests/gitops.spec.ts
           - scenario: known-issues
@@ -400,7 +400,7 @@ jobs:
           - scenario: diagnostics
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
-            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/onboarding.spec.ts
+            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
             specs: tests/gitops.spec.ts
           - scenario: known-issues
