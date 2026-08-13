@@ -40,7 +40,7 @@ test.beforeEach(async ({ page }) => {
   await assertClusterConnected(page);
 });
 
-test('every column of the Clusters table matches the hub record for that cluster', async ({ page }, testInfo) => {
+test('every column of the Clusters table matches the hub record for that cluster', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await gotoWhenNotRateLimited(page, '/clusters');
   await expect(page.locator('tbody tr').first(), 'the Clusters page lists no clusters').toBeVisible({
     timeout: 60_000,

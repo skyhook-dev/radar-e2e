@@ -129,7 +129,7 @@ async function useClusterWideNamespaceScope(page: Page): Promise<void> {
   expect(res.status(), 'reset the shared admin namespace-switcher scope to All namespaces').toBe(200);
 }
 
-test('a broken workload is detected and surfaces on the fleet Issues page, attributed to it', async ({ page }, testInfo) => {
+test('a broken workload is detected and surfaces on the fleet Issues page, attributed to it', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
   await useClusterWideNamespaceScope(page);

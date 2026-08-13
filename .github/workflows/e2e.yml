@@ -52,6 +52,14 @@ on:
         description: "helm-charts ref to install from"
         required: false
         default: main
+      scope:
+        description: "how much to run"
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - sanity
 
 jobs:
   # Build once. The scenarios below each need the same three images, and
@@ -325,6 +333,9 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
           PW_WORKERS: ${{ matrix.workers || 1 }}
+          # sanity runs the one test per domain that would catch the domain
+          # being broken outright - same clusters, a fraction of the time.
+          PW_GREP: ${{ inputs.scope == 'sanity' && '@sanity' || '' }}
         run: ./run.sh all
 
       # CLUSTER has to be passed here too. Without it run.sh falls back to its
@@ -487,6 +498,9 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           SPECS: ${{ matrix.specs }}
           PW_WORKERS: ${{ matrix.workers || 1 }}
+          # sanity runs the one test per domain that would catch the domain
+          # being broken outright - same clusters, a fraction of the time.
+          PW_GREP: ${{ inputs.scope == 'sanity' && '@sanity' || '' }}
         run: ./run.sh all
 
       # CLUSTER has to be passed here too. Without it run.sh falls back to its

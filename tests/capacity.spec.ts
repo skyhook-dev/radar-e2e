@@ -100,7 +100,7 @@ test.beforeEach(async ({ page }) => {
   await waitForFleetReporting(page);
 });
 
-test('the capacity page reports this cluster nodes and allocatable resources', async ({ page }, testInfo) => {
+test('the capacity page reports this cluster nodes and allocatable resources', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await gotoWhenNotRateLimited(page, '/capacity');
 
   const nodes = nodeCount();

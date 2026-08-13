@@ -79,7 +79,7 @@ test.beforeEach(async ({ page }) => {
   await waitForFleetReporting(page);
 });
 
-test('the Issues card on the dashboard agrees with the Issues page it links to', async ({ page }, testInfo) => {
+test('the Issues card on the dashboard agrees with the Issues page it links to', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await gotoWhenNotRateLimited(page, '/');
 
   const card = page.locator('a[href^="/issues"]').filter({ hasText: /^\s*\d+\s*$/ }).first();

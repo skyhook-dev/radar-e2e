@@ -103,7 +103,7 @@ test.describe('MCP over the hub', () => {
     await api.dispose();
   });
 
-  test('mints a PAT, speaks MCP through the hub, and list_namespaces matches kubectl', async ({ page }, testInfo) => {
+  test('mints a PAT, speaks MCP through the hub, and list_namespaces matches kubectl', { tag: '@sanity' }, async ({ page }, testInfo) => {
     const tokenName = `e2e-mcp-${Date.now()}`;
     const { id: patId, token } = await mintPAT(page, tokenName);
 

@@ -10,7 +10,7 @@ test.describe('sign-in', () => {
   // reusing the shared session.
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test('break-glass admin signs in and lands in the app', async ({ page }, testInfo) => {
+  test('break-glass admin signs in and lands in the app', { tag: '@sanity' }, async ({ page }, testInfo) => {
     const consoleErrors = watchConsoleErrors(page);
 
     // Signed-out login page: the first surface anyone sees, and the one that

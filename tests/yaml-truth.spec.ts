@@ -82,7 +82,7 @@ test.beforeEach(async ({ page }) => {
   await assertClusterConnected(page);
 });
 
-test('the YAML for a pod is that pod, down to its uid', async ({ page }, testInfo) => {
+test('the YAML for a pod is that pod, down to its uid', { tag: '@sanity' }, async ({ page }, testInfo) => {
   const pods = JSON.parse(kubectl('get', 'pods', '-n', FIXTURE_NS, '-l', 'app=chatty', '-o', 'json')) as {
     items: K8sObject[];
   };

@@ -15,7 +15,7 @@ test.beforeAll(() => {
   if (!clusterId) throw new Error('CLUSTER_ID must be set - run through ./run.sh');
 });
 
-test('the Helm page lists the releases installed in the cluster', async ({ page }, testInfo) => {
+test('the Helm page lists the releases installed in the cluster', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
 

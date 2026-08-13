@@ -110,7 +110,7 @@ test.beforeEach(async ({ page }) => {
   await waitForFleetReporting(page);
 });
 
-test('fleet search finds the resources this cluster really has, across kinds', async ({ page }, testInfo) => {
+test('fleet search finds the resources this cluster really has, across kinds', { tag: '@sanity' }, async ({ page }, testInfo) => {
   const expected = clusterMatches(PREFIX);
   expect(
     expected.length,

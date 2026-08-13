@@ -66,7 +66,7 @@ test.beforeEach(async ({ page }) => {
   await gotoWhenNotRateLimited(page, '/');
 });
 
-test('the bell agrees with the inbox, and every notification says which cluster it is about', async ({
+test('the bell agrees with the inbox, and every notification says which cluster it is about', { tag: '@sanity' }, async ({
   page,
 }, testInfo) => {
   const items = await inboxItems(page);

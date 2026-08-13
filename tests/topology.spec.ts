@@ -59,7 +59,7 @@ test.beforeEach(async ({ page }) => {
   await waitForFleetReporting(page);
 });
 
-test('the topology graph counts the resources this cluster actually has', async ({ page }, testInfo) => {
+test('the topology graph counts the resources this cluster actually has', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await gotoWhenNotRateLimited(page, '/topology');
 
   await expect

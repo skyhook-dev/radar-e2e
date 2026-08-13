@@ -86,7 +86,7 @@ test.beforeEach(async ({ page }) => {
   await assertClusterConnected(page);
 });
 
-test('every resource count the sidebar advertises matches the cluster', async ({ page }, testInfo) => {
+test('every resource count the sidebar advertises matches the cluster', { tag: '@sanity' }, async ({ page }, testInfo) => {
   await openResources(page);
 
   const shown = await sidebarCounts(page);

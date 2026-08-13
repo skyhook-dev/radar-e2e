@@ -47,6 +47,23 @@ RADAR_DIR="${RADAR_DIR:-../radar}"
 VARIANT="${VARIANT:-main}"
 HELM_REPO_URL="${HELM_REPO_URL:-https://skyhook-io.github.io/helm-charts}"
 CLUSTER="${CLUSTER:-radar-e2e}"
+
+# This harness creates and deletes clusters and installs charts into them. A
+# name that does not look like a throwaway is almost certainly a mistake - a
+# copied command, a stale env var - and the cost of being wrong is somebody
+# else's cluster. Set E2E_ALLOW_ANY_CLUSTER=1 to override deliberately.
+case "$CLUSTER" in
+  radar-e2e|e2e-*|pub-*) ;;
+  *)
+    if [ "${E2E_ALLOW_ANY_CLUSTER:-0}" != "1" ]; then
+      echo "refusing to operate on a cluster named '$CLUSTER'." >&2
+      echo "this harness creates, installs into and deletes the cluster it is pointed at," >&2
+      echo "so it only accepts names that are obviously throwaway: radar-e2e, e2e-*, pub-*." >&2
+      echo "set E2E_ALLOW_ANY_CLUSTER=1 if you really mean it." >&2
+      exit 2
+    fi
+    ;;
+esac
 NS="${NS:-radar-hub}"
 RADAR_NS="${RADAR_NS:-radar}"
 DEMO_NS="${DEMO_NS:-e2e-demo}"
@@ -371,7 +388,7 @@ run_tests() {
     KUBE_CONTEXT="$KUBE_CONTEXT" DEMO_NS="$DEMO_NS" DEMO_DEPLOY="$DEMO_DEPLOY" \
     NS="$NS" RADAR_NS="$RADAR_NS" RADAR_DIR="$RADAR_DIR" HELM_REPO_URL="$HELM_REPO_URL" \
     FIXTURE_NS="$FIXTURE_NS" PW_WORKERS="${PW_WORKERS:-1}" \
-    npx playwright test ${SPECS:-}
+    npx playwright test ${SPECS:-} ${PW_GREP:+--grep $PW_GREP --pass-with-no-tests}
   cd "$REPO_ROOT"
 }
 
