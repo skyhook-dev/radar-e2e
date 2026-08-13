@@ -369,6 +369,39 @@ const failingScenarios = [...outcomesByScenario.entries()]
   }));
 
 /**
+ * One row per scenario for the summary table: how many tests ran and passed on
+ * each variant, and how much visual evidence came back.
+ *
+ * This exists so the top of the page answers "what happened" without scrolling
+ * through 700 screenshots. Counting is per variant because the whole point of
+ * the two-variant run is that they can differ.
+ */
+const summaryRows = scenarios.map((scenario) => {
+  const list = outcomesByScenario.get(scenario) ?? [];
+  const per = (variant) => {
+    const mine = list.filter((o) => o.variant === variant);
+    return {
+      total: mine.length,
+      failed: mine.filter(isFailure).length,
+      skipped: mine.filter((o) => o.status === 'skipped').length,
+    };
+  };
+  const surfaces = byScenario.get(scenario)?.size ?? 0;
+  const recordings = rawVideos.filter((v) => v.scenario === scenario).length;
+  return { scenario, main: per('main'), published: per('published'), surfaces, recordings };
+});
+
+const cell = (c) => {
+  if (!c.total) return '<span class="dim">-</span>';
+  const passed = c.total - c.failed - c.skipped;
+  const bits = [`${passed}/${c.total}`];
+  if (c.skipped) bits.push(`${c.skipped} skipped`);
+  return c.failed
+    ? `<span class="bad">${passed}/${c.total}, ${c.failed} failed</span>`
+    : `<span class="ok">${bits.join(', ')}</span>`;
+};
+
+/**
  * What happened in one scenario, per variant, naming the failures.
  *
  * A test whose spec pinned it with test.fail() and which then passed shows up
@@ -505,6 +538,13 @@ const html = `<!doctype html>
   .rectitle { padding: 9px 14px; font-size: 13px; }
   .pane video { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; background: #000; }
   .pane > .label a { font-size: 12px; }
+  table.summary { border-collapse: collapse; margin: 0 0 22px; font-size: 13px; width: 100%; max-width: 760px; }
+  table.summary th, table.summary td { text-align: left; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.summary th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  table.summary td.num { font-variant-numeric: tabular-nums; }
+  .ok { color: #15803d; }
+  .bad { color: #b91c1c; font-weight: 600; }
+  .dim { color: var(--muted); }
   footer { padding: 24px 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 </style>
 <header>
@@ -541,6 +581,19 @@ const html = `<!doctype html>
     one side only usually means the feature does not exist in the other - which is itself the thing to look at.
     Click any image to open it full size.
   </p>
+  <table class="summary">
+    <thead><tr><th>Scenario</th><th>Built from main</th><th>Published</th><th>Surfaces</th><th>Recordings</th></tr></thead>
+    <tbody>
+${summaryRows
+  .map(
+    (r) =>
+      `      <tr><td><a href="#${esc(r.scenario)}">${esc(r.scenario)}</a></td>` +
+      `<td class="num">${cell(r.main)}</td><td class="num">${cell(r.published)}</td>` +
+      `<td class="num">${r.surfaces}</td><td class="num">${r.recordings || '<span class="dim">-</span>'}</td></tr>`,
+  )
+  .join('\n')}
+    </tbody>
+  </table>
 ${
   failingScenarios.length
     ? `  <div class="outcome bad" style="margin-bottom:20px">
