@@ -263,10 +263,6 @@ jobs:
             specs: tests/cluster-lifecycle.spec.ts
           - scenario: multi-cluster
             specs: tests/multi-cluster.spec.ts
-    # A sanity scope only spins the clusters that have something tagged to
-    # run; the rest would spend three minutes building a cluster to run no
-    # tests at all.
-    if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
@@ -286,14 +282,17 @@ jobs:
           path: .e2e-repos/helm-charts
 
       - name: Download images
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         uses: actions/download-artifact@v4
         with:
           name: e2e-images
 
       - name: Load images
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         run: gunzip -c images.tar.gz | docker load
 
       - name: Install kind
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         # Installed directly rather than via helm/kind-action, which was pinned
         # to the moving @v1 tag: a release of it began failing with
         # "No such container: kind-registry" even under install_only, and took
@@ -325,6 +324,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Cache Playwright browsers
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -334,6 +334,7 @@ jobs:
       # run. Playwright traces record the login form being filled, so a shared
       # secret would land inside the uploaded artifacts on every failure.
       - name: Run browser e2e
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         env:
           RADAR_HUB_LICENSE: ${{ secrets.E2E_HUB_LICENSE }}
           SKIP_BUILD: "1"
@@ -446,10 +447,6 @@ jobs:
             specs: tests/cluster-lifecycle.spec.ts
           - scenario: multi-cluster
             specs: tests/multi-cluster.spec.ts
-    # A sanity scope only spins the clusters that have something tagged to
-    # run; the rest would spend three minutes building a cluster to run no
-    # tests at all.
-    if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
     steps:
       - name: Checkout this harness
         uses: actions/checkout@v6
@@ -469,6 +466,7 @@ jobs:
           path: .e2e-repos/helm-charts
 
       - name: Install kind
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         # Installed directly rather than via helm/kind-action, which was pinned
         # to the moving @v1 tag: a release of it began failing with
         # "No such container: kind-registry" even under install_only, and took
@@ -500,6 +498,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Cache Playwright browsers
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -509,6 +508,7 @@ jobs:
       # run. Playwright traces record the login form being filled, so a shared
       # secret would land inside the uploaded artifacts on every failure.
       - name: Run browser e2e
+        if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
         env:
           RADAR_HUB_LICENSE: ${{ secrets.E2E_HUB_LICENSE }}
           VARIANT: published
