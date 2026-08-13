@@ -377,8 +377,68 @@ run_tests() {
 
 dump_diagnostics() {
   say "diagnostics"
-  $K -n "$NS" get pods -o wide || true
-  $K -n "$NS" logs deploy/radar-hub-hub --tail=100 || true
+
+  # Pods first, across every namespace this harness puts something in, so a
+  # crashlooping component is visible before the logs are read.
+  for ns in "$NS" "$RADAR_NS" "$FIXTURE_NS"; do
+    echo "--- pods in ${ns}"
+    $K -n "$ns" get pods -o wide 2>&1 || true
+  done
+
+  echo "--- anything not Running or Completed"
+  $K get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded -o wide 2>&1 || true
+
+  # Enough log to see a worker loop, not just the last few lines. --previous
+  # too: when a pod restarted, the log that explains why is the one before.
+  for target in "deploy/radar-hub-hub" "deploy/radar-hub-web" "statefulset/radar-hub-postgres"; do
+    echo "--- ${NS} ${target} (last 400)"
+    $K -n "$NS" logs "$target" --tail=400 2>&1 || true
+    echo "--- ${NS} ${target} previous container, if it restarted"
+    $K -n "$NS" logs "$target" --tail=200 --previous 2>&1 || true
+  done
+
+  echo "--- ${RADAR_NS} radar agent (last 300)"
+  $K -n "$RADAR_NS" logs deploy/radar --tail=300 2>&1 || true
+
+  echo "--- recent cluster events"
+  $K get events -A --sort-by=.lastTimestamp 2>&1 | tail -60 || true
+
+  # The hub's own view of itself. This is what tells a rule that never fired
+  # apart from an alert that fired and was never delivered - the two look
+  # identical from the outside, and neither is visible in a pod log alone.
+  dump_hub_state
+}
+
+# Authenticated GETs against the running hub, dumped as JSON.
+dump_hub_state() {
+  local jar="$DIR/.run/diag-cookies.txt"
+  rm -f "$jar"
+
+  if ! curl -sf -c "$jar" -X POST "$HUB_URL/api/auth/login" \
+      -H "content-type: application/json" \
+      -d "{\"email\":\"${E2E_ADMIN_EMAIL:-}\",\"password\":\"${E2E_ADMIN_PASSWORD:-}\"}" >/dev/null 2>&1; then
+    echo "--- hub API state: could not sign in, skipping"
+    return 0
+  fi
+
+  local org
+  org="$(curl -sf -b "$jar" "$HUB_URL/api/orgs" 2>/dev/null \
+    | sed -n 's/.*"id":"\(org_[a-z0-9]*\)".*/\1/p' | head -1)"
+
+  for path in \
+    "/api/clusters" \
+    "/api/fleet/issues" \
+    "${org:+/api/orgs/$org/alerts/rules}" \
+    "${org:+/api/orgs/$org/alerts/instances?status=open}" \
+    "${org:+/api/orgs/$org/inbox}" \
+    "/api/triage"
+  do
+    [ -n "$path" ] || continue
+    echo "--- GET ${path}"
+    curl -sf -b "$jar" "$HUB_URL$path" 2>&1 | head -c 4000 || true
+    echo
+  done
+  rm -f "$jar"
 }
 
 down() {

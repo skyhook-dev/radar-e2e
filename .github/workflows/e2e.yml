@@ -495,7 +495,7 @@ jobs:
       - name: Collect diagnostics
         if: always()
         env:
-          CLUSTER: e2e-${{ matrix.scenario }}
+          CLUSTER: pub-${{ matrix.scenario }}
         run: |
           ./run.sh logs > diagnostics.txt 2>&1 || true
           cp .run/port-forward.log port-forward.log 2>/dev/null || true
