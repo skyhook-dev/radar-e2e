@@ -335,6 +335,7 @@ jobs:
         if: always()
         env:
           CLUSTER: e2e-${{ matrix.scenario }}
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
         run: |
           ./run.sh logs > diagnostics.txt 2>&1 || true
           cp .run/port-forward.log port-forward.log 2>/dev/null || true
@@ -496,6 +497,7 @@ jobs:
         if: always()
         env:
           CLUSTER: pub-${{ matrix.scenario }}
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
         run: |
           ./run.sh logs > diagnostics.txt 2>&1 || true
           cp .run/port-forward.log port-forward.log 2>/dev/null || true

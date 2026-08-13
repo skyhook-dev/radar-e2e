@@ -414,6 +414,16 @@ dump_hub_state() {
   local jar="$DIR/.run/diag-cookies.txt"
   rm -f "$jar"
 
+  # The diagnostics step does not carry the test step's credentials, so take
+  # the password the harness generated and stored during `up`. Without this the
+  # sign-in silently failed and the whole API dump was skipped - which is how a
+  # run reported "no notification" with no way to see whether the hub had even
+  # created one.
+  if [ -z "${E2E_ADMIN_PASSWORD:-}" ] && [ -s "$ADMIN_PASSWORD_FILE" ]; then
+    E2E_ADMIN_PASSWORD="$(cat "$ADMIN_PASSWORD_FILE")"
+  fi
+  E2E_ADMIN_EMAIL="${E2E_ADMIN_EMAIL:-e2e-admin@skyhook.io}"
+
   if ! curl -sf -c "$jar" -X POST "$HUB_URL/api/auth/login" \
       -H "content-type: application/json" \
       -d "{\"email\":\"${E2E_ADMIN_EMAIL:-}\",\"password\":\"${E2E_ADMIN_PASSWORD:-}\"}" >/dev/null 2>&1; then
