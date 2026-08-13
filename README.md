@@ -42,28 +42,27 @@ behaves the same on a laptop and on a CI runner.
 
 ## What it covers
 
-Each scenario runs as its own CI job with its own cluster, so they finish in the
-time of the slowest rather than the sum, and a wedged cluster cannot take the
-others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
+Each scenario runs as its own CI job with its own cluster - created fresh for
+that job and thrown away after - so they finish in the time of the slowest
+rather than the sum, and a wedged cluster cannot take the others down. Locally, `SPECS=timeline ./run.sh test` runs one of them.
 
-22 scenarios, roughly 55 tests:
+13 scenarios, 99 tests, each scenario run twice - once against a hub built from
+main and once against the published release.
 
 | Scenario | What it proves |
 |---|---|
-| `smoke` | break-glass admin reaches the authenticated app shell, and the org the hub seeds from the license claim exists |
-| `timeline` | a workload change made with kubectl reaches both the hub's timeline endpoint and the timeline page |
-| `helm` / `helm-actions` | releases the harness installed are listed with chart version and status, and the write actions behave |
-| `resources` / `cluster-views` | workload browsing, and the cluster-scoped views radar serves through the tunnel |
-| `logs` / `exec` | log streaming and an interactive pod terminal, both proxied end to end |
-| `issues` / `alerts` / `diagnose` | problem detection surfaces real cluster state rather than an empty all-clear |
-| `certs-checks` | certificate and upgrade-impact checks read live cluster facts |
-| `applications-packages` / `gitops` | application and chart inventory, including CRD-backed GitOps resources |
-| `multi-cluster` | a second cluster connects and the fleet aggregates across both |
-| `cluster-lifecycle` | an agent that stops is reported disconnected rather than stale-connected, comes back on its own, and a rotated token drops the live tunnel and stops working |
-| `onboarding` | the install wizard names this hub's real agent URL and mints a token the hub accepts |
-| `org-admin` / `settings` | org administration and settings pages |
-| `write-actions` | mutating actions are gated and applied correctly |
-| `mcp` | the MCP surface answers over the tunnel |
+| `shell` | the app shell, the home dashboard, and that every dashboard card agrees with the page it links to; the fleet-wide pages render real fleet state; search boxes, state filters, sorting, grouping and drill-downs do what they say |
+| `fleet` | issue detection from live cluster state, the three triage actions (mark seen, snooze, dismiss) and their undo, the issue detail drawer, alerts firing on a real condition, certificates and checks read from the cluster |
+| `workloads` | resource browsing across nine kinds and their tabs, and mutating actions |
+| `helm` | releases listed with the chart version and status `helm list` reports, upgrades that change the cluster and advance the revision, and rollbacks |
+| `observability` | topology counts match `kubectl get` and follow the cluster live; capacity reports the node's real allocatable resources and counts pods blocked on scheduling (not pods blocked on an image pull); traffic and cost explain honestly why they have no data here rather than showing a confident zero |
+| `journey` | whole scenarios end to end: a workload breaks, is found on every surface, is triaged and then fixed - and the issue clears everywhere; a certificate nears expiry, reaches the dashboard, and clears when rotated; a scale reaches Applications, Resources and Topology and comes back down |
+| `platform` | the header search finds what the cluster really has and invents nothing; the notification inbox records issues arriving AND clearing, and can be cleared |
+| `diagnostics` | diagnosis, log streaming and an interactive pod terminal, all proxied end to end |
+| `multi-cluster` | a second cluster connects and the fleet aggregates across both, including honest reporting when one is offline |
+| `cluster-lifecycle` | an agent that stops is reported disconnected rather than stale-connected, comes back on its own, and a rotated token drops the live tunnel |
+| `admin` | onboarding, org administration and settings, including an install wizard that names this hub's real agent URL |
+| `gitops` | CRD-backed GitOps inventory, on its own cluster because it installs CRDs |
 | `known-issues` | pins defects found here so they turn red when fixed, not silently absorbed |
 
 Assertions are written against facts read from the cluster at the time of the
