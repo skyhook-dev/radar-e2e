@@ -19,10 +19,55 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const REPO = 'skyhook-dev/radar-e2e';
-const [, , runArg, ...flags] = process.argv;
-const verbose = flags.includes('-v');
+const args = process.argv.slice(2);
+// Anything starting with a dash is a flag wherever it appears; the run id is
+// whatever is left. Without this, `--history=10` was taken as the run id and
+// handed to gh, which is a confusing way to learn about argument order.
+const runArg = args.find((a) => !a.startsWith('-'));
+const verbose = args.includes('-v');
+const historyOf = args.find((a) => a.startsWith('--history'));
 
 const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+
+// A single run cannot tell a flake from a regression. This aggregates recent
+// runs so "failed once" and "fails every time" stop looking the same.
+if (historyOf) {
+  const count = Number(historyOf.split('=')[1] ?? 10);
+  const runs = JSON.parse(
+    gh('run', 'list', '--repo', REPO, '--workflow=e2e.yml', '--limit', String(count), '--json',
+       'databaseId,conclusion,event,createdAt'),
+  );
+  const byScenario = new Map();
+  let green = 0;
+  for (const r of runs) {
+    if (r.conclusion === 'success') green++;
+    let jobs = [];
+    try {
+      jobs = JSON.parse(gh('run', 'view', String(r.databaseId), '--repo', REPO, '--json', 'jobs')).jobs;
+    } catch { continue; }
+    for (const j of jobs.filter((x) => x.conclusion === 'failure')) {
+      const m = j.name.match(/^e2e-(main|published) \((\S+?),/);
+      if (!m) continue;
+      const key = m[2];
+      const seen = byScenario.get(key) ?? { runs: new Set(), variants: new Set() };
+      seen.runs.add(r.databaseId);
+      seen.variants.add(m[1]);
+      byScenario.set(key, seen);
+    }
+  }
+  console.log(`last ${runs.length} runs: ${green} green, ${runs.length - green} with failures`);
+  for (const r of runs) {
+    console.log(`  ${r.createdAt.slice(5, 16)}  ${(r.event || '').padEnd(17)} ${r.conclusion ?? 'running'}`);
+  }
+  if (byScenario.size) {
+    console.log('\nscenarios that failed, and how often:');
+    for (const [scenario, seen] of [...byScenario].sort((a, b) => b[1].runs.size - a[1].runs.size)) {
+      console.log(`  ${scenario.padEnd(20)} ${seen.runs.size}/${runs.length} runs  (${[...seen.variants].sort().join(', ')})`);
+    }
+    console.log('\nfailing in most runs on both variants is a finding; failing once on one is a flake.');
+  }
+  process.exit(0);
+}
 
 const runId =
   runArg ??
