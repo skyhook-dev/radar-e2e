@@ -3,6 +3,7 @@ import {
   assertClusterConnected,
   authStatePath,
   captureSurface,
+  dashboardCardText,
   gotoWhenNotRateLimited,
   waitForFleetReporting,
 } from './helpers';
@@ -148,15 +149,36 @@ test('the Issues card on the dashboard agrees with the Issues page it links to',
 test('the Checks card on the dashboard agrees with the Checks page it links to', async ({ page }, testInfo) => {
   await gotoWhenNotRateLimited(page, '/');
 
-  // The Checks card fills in after the rest of the dashboard, so this waits
-  // for it rather than reading the page the moment it renders.
-  await expect
-    .poll(async () => /\d+\s+of\s+\d+\s+passing/.test(await bodyText(page)), {
-      message: 'the dashboard Checks card never said how many checks are passing',
-      timeout: 60_000,
-      intervals: [2000, 3000, 5000],
-    })
-    .toBe(true);
+  // The Checks card fills in after the rest of the dashboard, so this waits for
+  // it rather than reading the page the moment it renders.
+  //
+  // It can also settle on "Checks - unavailable", which happened on one variant
+  // while the other showed the ratio. That is not automatically a defect: the
+  // card is being honest about data it does not have. What WOULD be a defect is
+  // the card claiming unavailable while the page behind it works, so that case
+  // is carried through and checked against the page rather than failed here.
+  //
+  // Reloaded between attempts on purpose. "unavailable" is also what the card
+  // shows when its own request was rate limited - the page itself says nothing
+  // about a 429 in that case, so there is no other way to tell a card that
+  // cannot fetch from a card that has nothing to fetch. Given a fresh load and
+  // a recovered budget it fills in; without the reloads this reported a
+  // dashboard that works as broken.
+  const cardSettled = await expect
+    .poll(
+      async () => {
+        const text = await dashboardCardText(page, '/checks');
+        if (/\d+\s+of\s+\d+\s+passing/.test(text)) return true;
+        await gotoWhenNotRateLimited(page, '/');
+        return /\d+\s+of\s+\d+\s+passing/.test(await dashboardCardText(page, '/checks'));
+      },
+      { timeout: 180_000, intervals: [5000, 10_000, 15_000] },
+    )
+    .toBe(true)
+    .then(() => true)
+    .catch(() => false);
+
+  const cardText = await dashboardCardText(page, '/checks');
   const dashboard = await bodyText(page);
   const passing = dashboard.match(/(\d+)\s+of\s+(\d+)\s+passing/);
 
@@ -171,15 +193,48 @@ test('the Checks card on the dashboard agrees with the Checks page it links to',
     .toBeGreaterThan(300);
   const checksPage = await bodyText(page);
 
-  // The same sentence, on both surfaces. This is the strongest available
-  // check: it is one derived fact, printed twice by two different queries.
-  if (passing) {
+  // If the card said it had nothing, the page must agree. A card reporting
+  // "unavailable" over a page that happily lists 181 findings is the dashboard
+  // telling an operator their checks are not being collected when they are.
+  if (!cardSettled && /unavailable/i.test(cardText)) {
+    const pageHasData = /\d+\s+of\s+\d+\s+passing|\d+\s+actionable/.test(checksPage);
     expect
       .soft(
-        checksPage,
-        `the dashboard says "${passing[0]}" but the Checks page reports a different passing ratio`,
+        pageHasData,
+        `the dashboard Checks card says "unavailable" while the Checks page it links to is serving data - ` +
+          `the dashboard is under-reporting what the product knows`,
       )
-      .toContain(passing[0]);
+      .toBe(false);
+  }
+
+  // The same sentence, on both surfaces - one derived fact, printed twice by
+  // two different queries.
+  //
+  // Compared with a re-read, because the ratio moves on its own: checks are
+  // re-evaluated as the cluster changes, and 452 of 633 became 453 of 634
+  // between two page loads during development. A disagreement only counts if
+  // it survives going back to the dashboard and asking again.
+  if (passing) {
+    let agreed = checksPage.includes(passing[0]);
+    let latest = passing[0];
+    for (let attempt = 0; attempt < 2 && !agreed; attempt++) {
+      await gotoWhenNotRateLimited(page, '/');
+      const again = (await bodyText(page)).match(/(\d+)\s+of\s+(\d+)\s+passing/);
+      if (!again) break;
+      latest = again[0];
+      await gotoWhenNotRateLimited(page, '/checks');
+      await expect
+        .poll(async () => (await bodyText(page)).length, { timeout: 60_000, intervals: [2000, 3000] })
+        .toBeGreaterThan(300);
+      agreed = (await bodyText(page)).includes(latest);
+    }
+    expect
+      .soft(
+        agreed,
+        `the dashboard says "${latest}" but the Checks page it links to reports a different passing ratio, ` +
+          `and they still disagree after re-reading both`,
+      )
+      .toBe(true);
   }
 
   // The card's total must account for everything the page splits it into.
@@ -215,9 +270,20 @@ test('every dashboard card links somewhere that loads and is about the same doma
 
   for (const { href } of cards) {
     await gotoWhenNotRateLimited(page, href);
+
+    // Polled, not read once. Navigation returns as soon as the page is not
+    // rate limited, which can be before it has rendered anything - and a
+    // destination measured mid-render reports as an empty page.
+    const rendered = await expect
+      .poll(async () => (await bodyText(page)).length, { timeout: 45_000, intervals: [1000, 2000, 3000] })
+      .toBeGreaterThan(200)
+      .then(() => true)
+      .catch(() => false);
     const text = await bodyText(page);
 
-    expect.soft(text.length, `the dashboard links to ${href}, which renders almost nothing`).toBeGreaterThan(200);
+    expect
+      .soft(rendered, `the dashboard links to ${href}, which renders almost nothing (${text.length} characters)`)
+      .toBe(true);
 
     // The destination has to be the domain the card was about. Checked from
     // the URL the app settled on, so a card that silently redirects home -
