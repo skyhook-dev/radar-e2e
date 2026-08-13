@@ -62,16 +62,26 @@ test('the topology graph counts the resources this cluster actually has', async 
 
   // Only the kinds verified to be counted the same way the cluster counts
   // them. See the header note on ConfigMap.
+  //
+  // Each kind is polled to convergence and then reported softly, so one wrong
+  // count does not hide the other two - "Pods disagree" and "every kind
+  // disagrees" point at completely different problems, and a hard assertion on
+  // the first one loses that distinction.
   for (const kind of ['Deployment', 'Pod', 'Service']) {
     const actual = clusterCount(kind.toLowerCase());
     await expect
-      .poll(async () => (await shownCounts(page)).kinds[kind], {
-        message:
-          `topology shows a different number of ${kind}s than the cluster has (${actual} per kubectl) - ` +
+      .poll(async () => (await shownCounts(page)).kinds[kind], { timeout: 45_000, intervals: [2000, 3000, 5000] })
+      .toBe(actual)
+      .catch(() => {
+        /* reported below, so the remaining kinds still get checked */
+      });
+
+    expect
+      .soft(
+        (await shownCounts(page)).kinds[kind],
+        `topology shows a different number of ${kind}s than the cluster has (${actual} per kubectl) - ` +
           `the graph is drawing a fleet that does not exist, or is missing part of the one that does`,
-        timeout: 45_000,
-        intervals: [2000, 3000, 5000],
-      })
+      )
       .toBe(actual);
   }
 

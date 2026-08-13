@@ -328,3 +328,48 @@ The rule that follows: any test touching one of these filters must put it back,
 the way `cluster-lifecycle` restores the agent it scaled down. A test that
 changes shared state and does not restore it is not isolated, however it is
 scheduled.
+
+## Triage records are org state, and the API only accepts same-origin deletes
+
+Mark seen, Snooze and Dismiss all POST to `/api/triage`, and all three are undone
+by `DELETE /api/triage/{id}`. The records are per organisation, not per session,
+so anything a test leaves behind hides an issue from every later run - the same
+class of problem as the view state above, with a sharper edge, because a
+dismissed issue disappears from the Open queue entirely.
+
+The trap when cleaning up: that DELETE is rejected with **403 from
+`page.request.delete`** and accepted with **204 from a `fetch` inside the page**.
+The hub requires the request to come from the app's own origin. An `afterEach`
+that used `page.request` and swallowed errors therefore did nothing at all, for
+every run, silently - which is worse than having no cleanup, because the next
+test starts against a hub that is not in the state it assumes and fails
+somewhere unrelated.
+
+Cleanup goes through `page.evaluate(() => fetch(...))`, and asserts the 204.
+
+## The fleet endpoints have a per-user budget, and pages say so out loud
+
+`/api/fleet/*` is limited to roughly 30 requests per minute per user. A run that
+walks several domains in a row exhausts it, and the pages then render an explicit
+error - "Failed to load checks: Too Many Requests" - **with their controls
+absent**. The grouping control disappears from Checks; the search box and every
+row disappear from Applications.
+
+A test that asserts on those controls reads this as a missing feature and files a
+defect against a product that is behaving correctly and saying so clearly. Use
+`gotoWhenNotRateLimited()` from `helpers.ts`, which waits the budget out and
+re-checks after a beat - a page can render its shell cleanly and only then have
+one of its own fetches come back 429.
+
+## Two Pending pods, one capacity problem
+
+The fixture cluster carries two pods that `kubectl get pods
+--field-selector=status.phase=Pending` returns together:
+
+- `unschedulable` - no node assigned, `PodScheduled` reason `Unschedulable`,
+  requests 512Gi. This is scheduling demand.
+- `broken-image` - already assigned to a node, stuck on `ImagePullBackOff`.
+
+The Capacity page counts the first and not the second, which is correct: the
+second one's problem is a registry, not a node. A test that took the field
+selector's count as its expected value would report correct behaviour as a bug.
