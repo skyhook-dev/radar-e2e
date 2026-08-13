@@ -322,9 +322,17 @@ jobs:
           SPECS: ${{ matrix.specs }}
         run: ./run.sh all
 
+      # CLUSTER has to be passed here too. Without it run.sh falls back to its
+      # local default and every CI run collected nothing but
+      # 'context "kind-radar-e2e" does not exist' - so when a job did fail
+      # there was no evidence of why.
       - name: Collect diagnostics
         if: always()
-        run: ./run.sh logs > diagnostics.txt 2>&1 || true
+        env:
+          CLUSTER: e2e-${{ matrix.scenario }}
+        run: |
+          ./run.sh logs > diagnostics.txt 2>&1 || true
+          cp .run/port-forward.log port-forward.log 2>/dev/null || true
 
       # Uploaded on success too: the report carries the timeline screenshot and
       # the matched event rows, which are the only proof anyone can look at that
@@ -339,6 +347,7 @@ jobs:
             test-results/
             visual/
             diagnostics.txt
+            port-forward.log
           retention-days: 7
 
       # Tolerant on purpose: when the job fails before kind is installed there
@@ -469,9 +478,17 @@ jobs:
           SPECS: ${{ matrix.specs }}
         run: ./run.sh all
 
+      # CLUSTER has to be passed here too. Without it run.sh falls back to its
+      # local default and every CI run collected nothing but
+      # 'context "kind-radar-e2e" does not exist' - so when a job did fail
+      # there was no evidence of why.
       - name: Collect diagnostics
         if: always()
-        run: ./run.sh logs > diagnostics.txt 2>&1 || true
+        env:
+          CLUSTER: e2e-${{ matrix.scenario }}
+        run: |
+          ./run.sh logs > diagnostics.txt 2>&1 || true
+          cp .run/port-forward.log port-forward.log 2>/dev/null || true
 
       # Uploaded on success too: the report carries the timeline screenshot and
       # the matched event rows, which are the only proof anyone can look at that
@@ -486,6 +503,7 @@ jobs:
             test-results/
             visual/
             diagnostics.txt
+            port-forward.log
           retention-days: 7
 
       # Tolerant on purpose: when the job fails before kind is installed there

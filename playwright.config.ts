@@ -7,7 +7,13 @@ export default defineConfig({
   testDir: './tests',
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  retries: 0,
+  // One retry in CI only. It does not paper over a broken product: a failing
+  // assertion fails again on the retry. What it absorbs is the harness losing
+  // its port-forward mid-run, which took out a whole domain's specs with
+  // ERR_CONNECTION_RESET while the same specs passed on the other variant.
+  // Playwright reports a test that needed the retry as flaky, and the gallery
+  // shows that count, so nothing is hidden.
+  retries: process.env.CI ? 1 : 0,
   workers: 1,
   // The HTML report carries the attachments (matched events, timeline
   // screenshot), so CI produces it on success too - a scheduled run that only

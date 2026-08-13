@@ -85,11 +85,19 @@ function collectVideos(root) {
     const here = suite.title && !/\.ts$/.test(suite.title) ? [...trail, suite.title] : trail;
     for (const spec of suite.specs ?? []) {
       for (const t of spec.tests ?? []) {
-        for (const r of t.results ?? []) {
+        const attempts = t.results ?? [];
+        for (const [attempt, r] of attempts.entries()) {
           out.push({
             title: [...here, spec.title].filter(Boolean).join(' > '),
             status: r.status,
             expected: t.expectedStatus,
+            // With retries on, one test yields several results. Only the last
+            // one is what happened; the earlier ones are what it took to get
+            // there. Counting them all would report a flaky test as both a
+            // failure and a pass.
+            attempt,
+            final: attempt === attempts.length - 1,
+            retried: attempts.length > 1,
             duration: r.duration,
             // First line only. Playwright errors carry a full stack and an
             // ANSI-coloured code frame; the first line is the assertion, which
@@ -362,10 +370,10 @@ const isFailure = (o) => o.status !== (o.expected ?? 'passed') && o.status !== '
 
 /** Every scenario with at least one unexpected result, for the run-wide summary. */
 const failingScenarios = [...outcomesByScenario.entries()]
-  .filter(([, list]) => list.some(isFailure))
+  .filter(([, list]) => list.some((o) => o.final !== false && isFailure(o)))
   .map(([scenario, list]) => ({
     scenario,
-    variants: [...new Set(list.filter(isFailure).map((o) => o.variant))].sort(),
+    variants: [...new Set(list.filter((o) => o.final !== false && isFailure(o)).map((o) => o.variant))].sort(),
   }));
 
 /**
@@ -379,11 +387,15 @@ const failingScenarios = [...outcomesByScenario.entries()]
 const summaryRows = scenarios.map((scenario) => {
   const list = outcomesByScenario.get(scenario) ?? [];
   const per = (variant) => {
-    const mine = list.filter((o) => o.variant === variant);
+    const mine = list.filter((o) => o.variant === variant && o.final !== false);
+    // A test that failed and then passed on its retry: worth showing, because
+    // a retry that is quietly absorbed is how a real intermittent bug hides.
+    const flaky = mine.filter((o) => o.retried && !isFailure(o)).length;
     return {
       total: mine.length,
       failed: mine.filter(isFailure).length,
       skipped: mine.filter((o) => o.status === 'skipped').length,
+      flaky,
     };
   };
   const surfaces = byScenario.get(scenario)?.size ?? 0;
@@ -396,9 +408,10 @@ const cell = (c) => {
   const passed = c.total - c.failed - c.skipped;
   const bits = [`${passed}/${c.total}`];
   if (c.skipped) bits.push(`${c.skipped} skipped`);
+  if (c.flaky) bits.push(`${c.flaky} flaky`);
   return c.failed
     ? `<span class="bad">${passed}/${c.total}, ${c.failed} failed</span>`
-    : `<span class="ok">${bits.join(', ')}</span>`;
+    : `<span class="${c.flaky ? 'warn' : 'ok'}">${bits.join(', ')}</span>`;
 };
 
 /**
@@ -543,6 +556,7 @@ const html = `<!doctype html>
   table.summary th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   table.summary td.num { font-variant-numeric: tabular-nums; }
   .ok { color: #15803d; }
+  .warn { color: #b45309; }
   .bad { color: #b91c1c; font-weight: 600; }
   .dim { color: var(--muted); }
   footer { padding: 24px 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
