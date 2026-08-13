@@ -59,6 +59,29 @@ async function fleetIssues(page: Page): Promise<FleetIssue[]> {
 const ours = (issues: FleetIssue[]) =>
   issues.find((i) => i.namespace === NAMESPACE && i.name === WORKLOAD && i.kind === 'Deployment');
 
+/**
+ * Unread notifications, as the API has them.
+ *
+ * This journey is the only place the inbox can honestly be checked. An alert
+ * rule's first poll of a cluster is a BASELINE - whatever is already broken is
+ * recorded without notifying - so on a fresh cluster the fixture issues never
+ * raise anything. This workload is created after that baseline, so it should.
+ */
+async function unreadNotifications(page: Page): Promise<Array<{ id: number; kind: string }>> {
+  return page
+    .evaluate(async () => {
+      const orgsRes = await fetch('/api/orgs');
+      if (!orgsRes.ok) return [];
+      const orgs = await orgsRes.json();
+      const org = Array.isArray(orgs) ? orgs[0] : (orgs.orgs ?? [])[0];
+      if (!org?.id) return [];
+      const res = await fetch(`/api/orgs/${org.id}/inbox`);
+      if (!res.ok) return [];
+      return (await res.json()).items ?? [];
+    })
+    .catch(() => []);
+}
+
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
 test.beforeAll(() => {
@@ -125,6 +148,31 @@ test('a workload that breaks is detected and can be found everywhere the operato
 
     expect.soft(found, `${path}: ${why}`).toBe(true);
     await captureSurface(page, testInfo, `journey-broken-on-${label}`);
+  }
+
+  // Somebody who is not staring at the dashboard has to be told. This workload
+  // broke after the alert rule's baseline poll, so it is exactly the case that
+  // should raise a notification.
+  const notified = await expect
+    .poll(async () => (await unreadNotifications(page)).length, { timeout: 180_000, intervals: [5000, 10_000] })
+    .toBeGreaterThan(0)
+    .then(() => true)
+    .catch(() => false);
+  expect
+    .soft(
+      notified,
+      `${NAMESPACE}/${WORKLOAD} broke after the alert rule had already baselined this cluster, and nothing ` +
+        `reached the notification inbox - the only people who find out are the ones already looking at the page`,
+    )
+    .toBe(true);
+
+  if (notified) {
+    await page.getByRole('button', { name: /Notifications/i }).first().click();
+    await page.waitForTimeout(2500);
+    expect
+      .soft(await bodyText(page), `the inbox was notified about something, but the entry never names ${WORKLOAD}`)
+      .toContain(WORKLOAD);
+    await captureSurface(page, testInfo, 'journey-broken-notified');
   }
 });
 
@@ -228,6 +276,23 @@ test('fixing the workload clears the issue from the API, the queue and the dashb
       intervals: [3000, 5000],
     })
     .toBe(false);
+
+  // And the recovery has to be announced too, not just the breakage.
+  const resolved = await expect
+    .poll(async () => (await unreadNotifications(page)).some((n) => /resolved|cleared/i.test(n.kind)), {
+      timeout: 180_000,
+      intervals: [5000, 10_000],
+    })
+    .toBe(true)
+    .then(() => true)
+    .catch(() => false);
+  expect
+    .soft(
+      resolved,
+      `${WORKLOAD} was fixed and the issue cleared everywhere, but no resolution notification was raised - ` +
+        `anyone who was told it broke is never told it recovered`,
+    )
+    .toBe(true);
 
   await captureSurface(page, testInfo, 'journey-broken-resolved');
 });

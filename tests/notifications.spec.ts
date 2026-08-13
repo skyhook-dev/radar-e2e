@@ -1,30 +1,28 @@
 import { test, expect, type Page } from '@playwright/test';
 import { assertClusterConnected, authStatePath, captureSurface, clusterId, gotoWhenNotRateLimited } from './helpers';
 
-// The notification inbox - how anyone finds out about a problem without
-// watching a dashboard.
+// The notification inbox behind the bell.
 //
-// It is the only surface in the product that tells the WHOLE story of an
-// issue rather than its current state: it records both the arrival and the
-// clearing. The fixture cluster produces both within minutes, so both can be
-// checked for real.
+// This checks the inbox as a MECHANISM - the count, the attribution, the panel
+// and clearing it - and deliberately does not require anything to be waiting in
+// it. Two things make that premise unsafe:
 //
-// What is checked:
-//   - the bell says how many are unread, in its accessible name
-//   - the inbox lists notifications attributed to a cluster that exists
-//   - the API and the panel agree about what happened
-//   - both halves of the lifecycle are represented: something opened, and
-//     something cleared
-//   - marking everything read actually clears the count
+//   - GET /api/orgs/{id}/inbox returns UNREAD items only, so anything that
+//     marks them read empties it, including the second test in this file.
+//   - An alert rule's first poll of a cluster is a BASELINE: whatever is
+//     already broken is recorded without notifying. On a cluster created
+//     minutes ago, every fixture issue is baselined, so an empty inbox there is
+//     correct behaviour, not a missed notification.
 //
-// Read off the running product before being written: the bell is labelled
-// "Notifications, N unread"; entries read "<subject>" then "New critical issue
-// in <cluster>" or "Resolved: <subject>" then "The issue in <cluster>
-// cleared."; and GET /api/orgs/<id>/inbox returns items whose `kind` is
-// issue.opened or issue.resolved with the cluster in `metadata`.
+// A test asserting "this cluster has issues, so the inbox must have something"
+// therefore fails on a healthy product - it did, on a fresh CI cluster, twice.
+// Proving that a notification is actually raised needs an issue created AFTER
+// the baseline, which is what journey-broken-workload does; the lifecycle
+// assertions live there.
 
 test.use({ storageState: authStatePath });
 test.setTimeout(300_000);
+test.describe.configure({ mode: 'serial' });
 
 type InboxItem = {
   id: number;
@@ -38,13 +36,14 @@ function bell(page: Page) {
   return page.getByRole('button', { name: /Notifications/i }).first();
 }
 
-/** The unread count the bell is advertising, or null when it says nothing. */
-async function unreadCount(page: Page): Promise<number | null> {
+/** The unread count the bell advertises in its accessible name. */
+async function unreadCount(page: Page): Promise<number> {
   const label = (await bell(page).getAttribute('aria-label')) ?? '';
   const m = label.match(/(\d+)\s*unread/i);
-  return m ? Number(m[1]) : label.toLowerCase().includes('unread') ? null : 0;
+  return m ? Number(m[1]) : 0;
 }
 
+/** Unread notifications, as the API has them. */
 async function inboxItems(page: Page): Promise<InboxItem[]> {
   return page
     .evaluate(async () => {
@@ -67,89 +66,73 @@ test.beforeEach(async ({ page }) => {
   await gotoWhenNotRateLimited(page, '/');
 });
 
-test('the inbox records issues arriving and clearing, attributed to a real cluster', async ({ page }, testInfo) => {
-  // The fixture cluster is deliberately broken in several ways, so something
-  // must have been notified about by now.
-  await expect
-    .poll(async () => (await inboxItems(page)).length, {
-      message:
-        'the notification inbox is empty although this cluster has issues - nobody would be told about a problem ' +
-        'unless they happened to be looking at the dashboard',
-      timeout: 120_000,
-      intervals: [3000, 5000, 10_000],
-    })
-    .toBeGreaterThan(0);
-
+test('the bell agrees with the inbox, and every notification says which cluster it is about', async ({
+  page,
+}, testInfo) => {
   const items = await inboxItems(page);
+  const shown = await unreadCount(page);
 
-  // Every notification has to say which cluster it is about, and it has to be
-  // this one - an unattributed alert is unactionable in a fleet.
-  const attributed = items.filter((i) => i.metadata?.cluster_id);
-  expect
-    .soft(attributed.length, 'notifications do not say which cluster they came from')
-    .toBeGreaterThan(0);
-  if (attributed.length) {
+  // The two have to tell the same story, but not the same number: the inbox
+  // endpoint returns a PAGE (50 items here) while the bell counts every unread
+  // one, so 117 on the bell against 50 from the API is correct. What would be
+  // wrong is a bell claiming unread notifications that the inbox does not have,
+  // which sends people looking for a problem that is not there.
+  if (items.length > 0) {
+    expect
+      .soft(shown, `the inbox holds ${items.length} unread notification(s) but the bell advertises ${shown}`)
+      .toBeGreaterThanOrEqual(items.length);
+  } else {
+    expect
+      .soft(shown, `the bell advertises ${shown} unread notification(s) while the inbox holds none`)
+      .toBe(0);
+  }
+
+  for (const item of items.slice(0, 5)) {
     expect
       .soft(
-        attributed[0].metadata?.cluster_id,
-        `a notification is attributed to a cluster that is not the one under test`,
+        item.metadata?.cluster_id,
+        `a ${item.kind} notification does not say which cluster it came from - unactionable in a fleet`,
       )
       .toBe(clusterId);
   }
 
-  // Both halves of the lifecycle. A product that only ever tells you things
-  // broke, and never that they recovered, is one people mute.
-  const kinds = new Set(items.map((i) => i.kind));
-  expect
-    .soft([...kinds].join(', '), 'the inbox never records an issue being raised')
-    .toMatch(/opened|created|new|issue\./i);
-  expect
-    .soft(
-      kinds.has('issue.resolved'),
-      `the inbox has ${items.length} notification(s) and not one of them is a resolution - ` +
-        `if issues never clear here, the count only ever grows`,
-    )
-    .toBe(true);
-
-  // And the panel has to show what the API holds.
+  // The panel has to open and show what the API holds.
   await bell(page).click();
   await expect
-    .poll(async () => (await bodyText(page)).includes('Mark all read'), { timeout: 30_000, intervals: [1000, 2000] })
+    .poll(async () => (await bodyText(page)).includes('Mark all read'), {
+      message: 'the notification panel does not open, or offers no way to clear it',
+      timeout: 30_000,
+      intervals: [1000, 2000],
+    })
     .toBe(true);
 
-  const panel = await bodyText(page);
   const clusterName = items.find((i) => i.metadata?.cluster_name)?.metadata?.cluster_name;
   if (clusterName) {
     expect
-      .soft(panel, `the inbox panel never names the cluster (${clusterName}) its notifications came from`)
+      .soft(await bodyText(page), `the panel never names the cluster (${clusterName}) its notifications came from`)
       .toContain(clusterName);
-  }
-  if (kinds.has('issue.resolved')) {
-    expect
-      .soft(panel, 'the API records resolutions but the panel never shows one')
-      .toMatch(/resolved|cleared/i);
   }
 
   await captureSurface(page, testInfo, 'notifications-inbox');
 });
 
-test('marking every notification read clears the unread count', async ({ page }) => {
+test('marking every notification read clears the count', async ({ page }) => {
   const before = await unreadCount(page);
-  test.skip(before === 0, 'nothing is unread, so there is nothing to clear');
+  test.skip(before === 0, 'nothing is unread - on a cluster this young that is expected, not a failure');
 
   await bell(page).click();
   const markAll = page.getByRole('button', { name: /Mark all read/i }).first();
   await expect(markAll, 'the inbox offers no way to clear the unread count').toBeVisible({ timeout: 30_000 });
   await markAll.click();
 
-  // Polled rather than read once: this cluster keeps breaking things, so a new
-  // notification can arrive between the click and the check. What has to be
-  // true is that the backlog went away, not that the number is frozen at zero.
+  // Polled, not read once: a cluster that keeps breaking things can raise a new
+  // notification between the click and the check. What has to be true is that
+  // the backlog cleared, not that the number is frozen at zero.
   await expect
     .poll(async () => unreadCount(page), {
       message: `"Mark all read" left ${before} notification(s) unread - the count cannot be cleared`,
       timeout: 60_000,
       intervals: [2000, 3000, 5000],
     })
-    .toBeLessThan(before ?? 1);
+    .toBeLessThan(before);
 });
