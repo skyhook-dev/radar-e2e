@@ -416,9 +416,12 @@ annotations, and both are questions for whoever owns the feature:
 - **The "Workload degraded" drawer carries no NEXT STEP** where the image-pull
   and unschedulable drawers both do. If every issue type is meant to offer
   guidance, this is a gap; if some are informational, it is not.
-- **A workload broken well after the alert baseline raised no notification
-  within three minutes**, on both variants. The alert poll runs every 60s +/-
-  15s, so the timing allows for it - but whether a freshly created org has a
-  default rule that notifies at all is not established here. The journey records
-  how many rules, open instances and notifications existed at each step, which
-  is what is needed to tell a rule problem from a delivery problem.
+- ~~A workload broken after the alert baseline raised no notification~~
+  **RESOLVED, and it was the test.** The org does have a default rule
+  ("Notify on critical issues", enabled, filtering severity=critical, with
+  inbox delivery and notify-on-resolve both on). The journey was creating its
+  workload before that rule's FIRST poll of the cluster, so the breakage was
+  swept into the baseline and correctly never notified. The journey now forces
+  the baseline first - a throwaway broken workload, waited on until an alert
+  instance proves the poll happened - and the notification then arrives, so it
+  is asserted rather than recorded.

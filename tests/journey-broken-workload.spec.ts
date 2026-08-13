@@ -84,19 +84,67 @@ async function unreadNotifications(page: Page): Promise<Array<{ id: number; kind
 
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
-test.beforeAll(() => {
-  kubectl('create', 'deployment', WORKLOAD, `--image=${BAD_IMAGE}`, '-n', NAMESPACE);
-});
+const DECOY = `journey-baseline-${Date.now()}`;
 
 test.afterAll(() => {
   kubectl('delete', 'deployment', WORKLOAD, '-n', NAMESPACE, '--ignore-not-found');
+  kubectl('delete', 'deployment', DECOY, '-n', NAMESPACE, '--ignore-not-found', '--wait=false');
 });
+
+/** Open alert instances the hub is holding for this cluster. */
+async function openAlertInstances(page: Page): Promise<Array<{ current_issue?: { name?: string } }>> {
+  return page
+    .evaluate(async () => {
+      const orgs = await (await fetch('/api/orgs')).json();
+      const org = Array.isArray(orgs) ? orgs[0] : (orgs.orgs ?? [])[0];
+      if (!org?.id) return [];
+      const res = await fetch(`/api/orgs/${org.id}/alerts/instances?status=open`);
+      return res.ok ? ((await res.json()).instances ?? []) : [];
+    })
+    .catch(() => []);
+}
+
+/**
+ * Make sure the alert rule has already baselined this cluster.
+ *
+ * A rule's FIRST poll of a cluster records whatever is broken without
+ * notifying. A workload created before that poll is swept into the baseline
+ * and never raises anything - which is correct behaviour, and which made an
+ * earlier version of this journey report a missing notification on a product
+ * that was working. A throwaway broken workload forces the baseline poll and
+ * proves it happened; everything created afterwards goes through the real
+ * open path. The same technique as alerts.spec.ts, for the same reason.
+ */
+async function forceBaseline(page: Page): Promise<boolean> {
+  kubectl('create', 'deployment', DECOY, `--image=${BAD_IMAGE}`, '-n', NAMESPACE);
+  const fired = await expect
+    .poll(async () => (await openAlertInstances(page)).some((i) => i.current_issue?.name === DECOY), {
+      timeout: 180_000,
+      intervals: [5000, 5000, 10_000],
+    })
+    .toBe(true)
+    .then(() => true)
+    .catch(() => false);
+  kubectl('delete', 'deployment', DECOY, '-n', NAMESPACE, '--ignore-not-found', '--wait=false');
+  return fired;
+}
 
 test('a workload that breaks is detected and can be found everywhere the operator looks', async ({
   page,
 }, testInfo) => {
   await page.goto('/');
   await assertClusterConnected(page);
+
+  // The alert rule has to have baselined this cluster BEFORE the workload
+  // exists, or its breakage is recorded silently and the notification checks
+  // below would be asking for something that correctly never happens.
+  const baselined = await forceBaseline(page);
+  testInfo.annotations.push({
+    type: 'notification',
+    description: `alert baseline forced: ${baselined ? 'confirmed by a decoy alert instance' : 'never confirmed'}`,
+  });
+
+  kubectl('create', 'deployment', WORKLOAD, `--image=${BAD_IMAGE}`, '-n', NAMESPACE);
 
   // Detection first: without this, every surface check below would be
   // reporting the same single fact and none of them would mean anything.
@@ -164,6 +212,21 @@ test('a workload that breaks is detected and can be found everywhere the operato
   // Both layers are recorded separately, because they fail differently: an
   // alert instance that never opens is a rule problem, and an instance that
   // opens without a notification is a delivery problem.
+  // With the baseline confirmed, a critical issue raised afterwards MUST reach
+  // the inbox: the default rule is enabled, filters on critical, and has
+  // inbox delivery on. This is now an assertion rather than a note.
+  if (baselined) {
+    await expect
+      .poll(async () => (await unreadNotifications(page)).length, {
+        message:
+          `${NAMESPACE}/${WORKLOAD} broke after the alert rule had demonstrably baselined this cluster, and ` +
+          `nothing reached the notification inbox - the only people who find out are the ones already looking`,
+        timeout: 240_000,
+        intervals: [5000, 10_000, 15_000],
+      })
+      .toBeGreaterThan(0);
+  }
+
   const notifications = await unreadNotifications(page);
   const rules = await page
     .evaluate(async () => {
