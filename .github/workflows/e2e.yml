@@ -221,15 +221,25 @@ jobs:
           - scenario: shell
             sanity: true
             specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
+          # Three at a time: resources and write-actions each own a private
+          # namespace and only touch their own deployment, and the inventory
+          # and YAML specs compare against live kubectl rather than against a
+          # count remembered before someone else's change.
           - scenario: workloads
+            workers: 3
             sanity: true
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/resource-inventory.spec.ts tests/yaml-truth.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
             sanity: true
             specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
-          - scenario: helm
+          # Helm and org administration on one cluster, four specs at a time.
+          # They share nothing: helm-actions installs its own throwaway release
+          # (and helm-detail deliberately ignores it), while the admin specs
+          # only read the org's own records.
+          - scenario: apps
+            workers: 4
             sanity: true
-            specs: tests/helm.spec.ts tests/helm-actions.spec.ts tests/helm-detail.spec.ts
+            specs: tests/helm.spec.ts tests/helm-actions.spec.ts tests/helm-detail.spec.ts tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           # Topology, Capacity, Traffic and Cost. Kept together and away from
           # the shell job because two of them CHANGE the cluster to prove the
           # pages track it - topology creates a Deployment, capacity scales the
@@ -262,9 +272,6 @@ jobs:
             # deployment, a TLS secret, and storefront's replica count - so they
             # can run at once instead of one after another.
             workers: 3
-
-          - scenario: admin
-            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
             specs: tests/gitops.spec.ts
           - scenario: known-issues
@@ -415,15 +422,25 @@ jobs:
           - scenario: shell
             sanity: true
             specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
+          # Three at a time: resources and write-actions each own a private
+          # namespace and only touch their own deployment, and the inventory
+          # and YAML specs compare against live kubectl rather than against a
+          # count remembered before someone else's change.
           - scenario: workloads
+            workers: 3
             sanity: true
             specs: tests/workload-tabs.spec.ts tests/resources.spec.ts tests/resource-inventory.spec.ts tests/yaml-truth.spec.ts tests/write-actions.spec.ts
           - scenario: fleet
             sanity: true
             specs: tests/issues.spec.ts tests/issue-actions.spec.ts tests/issue-drawer.spec.ts tests/alerts.spec.ts tests/applications-packages.spec.ts tests/certs-checks.spec.ts
-          - scenario: helm
+          # Helm and org administration on one cluster, four specs at a time.
+          # They share nothing: helm-actions installs its own throwaway release
+          # (and helm-detail deliberately ignores it), while the admin specs
+          # only read the org's own records.
+          - scenario: apps
+            workers: 4
             sanity: true
-            specs: tests/helm.spec.ts tests/helm-actions.spec.ts tests/helm-detail.spec.ts
+            specs: tests/helm.spec.ts tests/helm-actions.spec.ts tests/helm-detail.spec.ts tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           # Topology, Capacity, Traffic and Cost. Kept together and away from
           # the shell job because two of them CHANGE the cluster to prove the
           # pages track it - topology creates a Deployment, capacity scales the
@@ -456,9 +473,6 @@ jobs:
             # deployment, a TLS secret, and storefront's replica count - so they
             # can run at once instead of one after another.
             workers: 3
-
-          - scenario: admin
-            specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
             specs: tests/gitops.spec.ts
           - scenario: known-issues

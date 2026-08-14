@@ -24,6 +24,20 @@ test.setTimeout(300_000);
 
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
+/**
+ * A release that will still be there in a moment.
+ *
+ * Not simply the first one helm lists. helm-actions installs a throwaway
+ * release to exercise upgrade and rollback, and it sorts ahead of the
+ * harness's own - so "the first release" can be one that is about to be
+ * uninstalled underneath this spec the moment the two run at the same time.
+ * The charts the harness installs are the stable choice.
+ */
+function stableRelease() {
+  const releases = installedHelmReleases().filter((r) => !/^helm-actions-probe-/.test(r.name));
+  return releases.find((r) => r.name === 'radar') ?? releases[0];
+}
+
 /** Open a release's detail and wait for something only the detail shows. */
 async function openRelease(page: Page, name: string) {
   await gotoWhenNotRateLimited(page, '/helm');
@@ -56,9 +70,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('the release Overview reports the chart, version and revision helm reports', async ({ page }, testInfo) => {
-  const releases = installedHelmReleases();
-  expect(releases.length, 'no Helm releases are installed, so there is no detail to check').toBeGreaterThan(0);
-  const release = releases[0];
+  const release = stableRelease();
+  expect(release, 'no Helm releases are installed, so there is no detail to check').toBeTruthy();
 
   // `helm list` gives "radar-1.7.1"; the page splits it into chart and version.
   const [, chartVersion] = release.chart.match(/-(\d[\w.+-]*)$/) ?? [];
@@ -84,7 +97,7 @@ test('the release Overview reports the chart, version and revision helm reports'
 });
 
 test('the Values tab shows the values this release was installed with', async ({ page }, testInfo) => {
-  const release = installedHelmReleases()[0];
+  const release = stableRelease();
   const values = helm('get', 'values', release.name, '-n', release.namespace, '-o', 'json');
   const parsed = JSON.parse(values || '{}') as Record<string, unknown>;
   const keys = Object.keys(parsed).filter((k) => k !== 'USER-SUPPLIED VALUES');
@@ -110,7 +123,7 @@ test('the Values tab shows the values this release was installed with', async ({
 });
 
 test('the Manifest tab declares the objects helm says this release owns', async ({ page }, testInfo) => {
-  const release = installedHelmReleases()[0];
+  const release = stableRelease();
   const manifest = helm('get', 'manifest', release.name, '-n', release.namespace);
 
   // The object names helm's own manifest declares - the page must not be
@@ -135,7 +148,7 @@ test('the Manifest tab declares the objects helm says this release owns', async 
 });
 
 test('the History tab lists the revisions helm has recorded', async ({ page }, testInfo) => {
-  const release = installedHelmReleases()[0];
+  const release = stableRelease();
   const history = JSON.parse(helm('history', release.name, '-n', release.namespace, '-o', 'json')) as {
     revision: number;
     status: string;
