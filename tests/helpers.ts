@@ -374,3 +374,21 @@ export async function waitForFleetReporting(page: Page, timeout = 120_000) {
     await page.reload();
   }
 }
+
+/**
+ * GET a fleet endpoint, waiting out the request budget rather than failing on it.
+ *
+ * The fleet endpoints allow roughly 30 requests per minute per user, and that
+ * budget is shared by everything signed in as the same admin - including other
+ * specs running beside this one in the same job. A 429 there means "ask again
+ * shortly", not "the endpoint is broken", and asserting status === 200 on the
+ * first try turns parallelism into a stream of false failures.
+ */
+export async function fleetGet(page: Page, path: string, timeout = 90_000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const res = await page.request.get(path);
+    if (res.status() !== 429 || Date.now() > deadline) return res;
+    await page.waitForTimeout(5000);
+  }
+}

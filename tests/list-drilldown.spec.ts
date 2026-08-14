@@ -1,5 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  gotoWhenNotRateLimited,
+} from './helpers';
 
 // Clicking a row must open THAT row.
 //
@@ -59,7 +64,7 @@ test('clicking a row on any list opens the item that was clicked', async ({ page
   await assertClusterConnected(page);
 
   for (const { path, domain, row } of LISTS) {
-    await page.goto(path);
+    await gotoWhenNotRateLimited(page, path);
 
     const rows = page.locator(row);
     const appeared = await expect
@@ -151,7 +156,7 @@ test('a drill-down can be left again, and the list is still there', async ({ pag
   // that navigate rather than open a drawer, since those are the ones where
   // back has to restore the list.
   for (const { path, domain, row } of LISTS.filter((l) => l.path === '/applications' || l.path === '/clusters')) {
-    await page.goto(path);
+    await gotoWhenNotRateLimited(page, path);
     const rows = page.locator(row);
     const ok = await expect
       .poll(async () => rows.count(), { timeout: 45_000, intervals: [1000, 2000] })

@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, clusterId, kubectl } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  clusterId,
+  fleetGet,
+  kubectl,
+} from './helpers';
 
 // The dashboard, held to the same sources its domain pages use.
 //
@@ -79,7 +86,7 @@ test('the dashboard agrees with the sources its own pages are built on', async (
   );
 
   // --- Active issues ------------------------------------------------------
-  const issuesRes = await page.request.get('/api/fleet/issues');
+  const issuesRes = await fleetGet(page, '/api/fleet/issues');
   expect.soft(issuesRes.status(), 'fleet issues endpoint').toBe(200);
   if (issuesRes.status() === 200) {
     const body = (await issuesRes.json()) as FleetIssues;
@@ -127,7 +134,7 @@ test('the dashboard agrees with the sources its own pages are built on', async (
   }
 
   // --- Checks -------------------------------------------------------------
-  const auditRes = await page.request.get('/api/fleet/audit');
+  const auditRes = await fleetGet(page, '/api/fleet/audit');
   expect.soft(auditRes.status(), 'fleet audit endpoint').toBe(200);
   if (auditRes.status() === 200) {
     const audit = (await auditRes.json()) as {
