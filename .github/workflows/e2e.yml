@@ -218,9 +218,24 @@ jobs:
         # radar, known-issues sets the namespace filter that leaks server-side,
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
+          # The read-only half of the shell, four at a time. None of these
+          # changes what another asserts: they sign in, read pages, follow
+          # links and compare surfaces against the cluster. timeline does scale
+          # the demo workload to produce an event, and nothing here counts pods.
           - scenario: shell
+            workers: 4
             sanity: true
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+          # The other half, kept serial and apart on purpose.
+          #
+          # These three drive the controls that CHANGE what a page shows -
+          # search boxes, state filters, grouping, sort order - and two of those
+          # are stored per user by the hub rather than per tab, so setting one
+          # changes what every other page load sees (KNOWN-ISSUES.md). Running
+          # them beside a spec that counts issues is how a passing product gets
+          # reported as broken.
+          - scenario: interactions
+            specs: tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/timeline-depth.spec.ts
           # Three at a time: resources and write-actions each own a private
           # namespace and only touch their own deployment, and the inventory
           # and YAML specs compare against live kubectl rather than against a
@@ -419,9 +434,24 @@ jobs:
         # radar, known-issues sets the namespace filter that leaks server-side,
         # cluster-lifecycle scales the agent to zero and rotates its token, and
         # multi-cluster attaches a second agent.
+          # The read-only half of the shell, four at a time. None of these
+          # changes what another asserts: they sign in, read pages, follow
+          # links and compare surfaces against the cluster. timeline does scale
+          # the demo workload to produce an event, and nothing here counts pods.
           - scenario: shell
+            workers: 4
             sanity: true
-            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/timeline-depth.spec.ts tests/mcp.spec.ts
+            specs: tests/smoke.spec.ts tests/home-dashboard.spec.ts tests/dashboard-consistency.spec.ts tests/fleet-pages.spec.ts tests/list-drilldown.spec.ts tests/cluster-views.spec.ts tests/cluster-truth.spec.ts tests/timeline.spec.ts tests/mcp.spec.ts
+          # The other half, kept serial and apart on purpose.
+          #
+          # These three drive the controls that CHANGE what a page shows -
+          # search boxes, state filters, grouping, sort order - and two of those
+          # are stored per user by the hub rather than per tab, so setting one
+          # changes what every other page load sees (KNOWN-ISSUES.md). Running
+          # them beside a spec that counts issues is how a passing product gets
+          # reported as broken.
+          - scenario: interactions
+            specs: tests/domain-depth.spec.ts tests/sorting-grouping.spec.ts tests/timeline-depth.spec.ts
           # Three at a time: resources and write-actions each own a private
           # namespace and only touch their own deployment, and the inventory
           # and YAML specs compare against live kubectl rather than against a
