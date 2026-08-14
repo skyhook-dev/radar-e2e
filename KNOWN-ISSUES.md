@@ -430,3 +430,30 @@ annotations, and both are questions for whoever owns the feature:
   the baseline first - a throwaway broken workload, waited on until an alert
   instance proves the poll happened - and the notification then arrives, so it
   is asserted rather than recorded.
+
+## Alerts open, the inbox stays empty
+
+Reproduced on both variants across six runs, on clusters minutes old:
+
+- the alert rule's baseline poll is demonstrably complete - a throwaway broken
+  workload opens an alert instance first, and only then is the real one created
+- the issue is classified `severity=critical`
+- the default rule is `enabled`, filters `severities: [critical]`, and has
+  `inbox_enabled: true` and `notify_on_resolve: true`
+- five alert instances are open
+- and `GET /api/orgs/{id}/inbox` returns nothing, for at least 450 seconds
+
+So alerts fire and nothing is delivered. Notifications clearly do get created
+under some conditions - a hub that had been running for a day held 117 - which
+is why this is recorded rather than filed: what differs between that hub and a
+fresh one is not established here.
+
+The journey keeps a two-minute version of the check and records the outcome as
+an annotation, so the day it starts arriving the run says so. It used to wait
+eight minutes, which was most of the twenty that scenario took, and that
+scenario sets the wall clock for the whole suite - the evidence was already
+collected six times over.
+
+What would settle it: whether the hub creates the notification rows at all
+(the API state dump in diagnostics now shows this), or creates them and the
+inbox query does not return them.
