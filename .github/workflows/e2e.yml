@@ -235,11 +235,19 @@ jobs:
           # pages track it - topology creates a Deployment, capacity scales the
           # unschedulable fixture away and back.
           - scenario: observability
+            # Capacity scales the unschedulable fixture while topology counts
+            # pods - safe because topology compares against live kubectl rather
+            # than a remembered number, so a concurrent change is not a
+            # mismatch.
+            workers: 3
             sanity: true
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search
           # box in the header and the notification inbox behind the bell.
           - scenario: platform
+            # Search only reads; notifications only marks read. Nothing one
+            # does changes what the other asserts.
+            workers: 2
             sanity: true
             specs: tests/fleet-search.spec.ts tests/notifications.spec.ts
           # Its own cluster: this one RAISES an issue and then resolves it, so
@@ -252,6 +260,8 @@ jobs:
             # can run at once instead of one after another.
             workers: 3
           - scenario: diagnostics
+            # Diagnosis, log streaming and exec are independent of each other.
+            workers: 3
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
             specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
@@ -419,11 +429,19 @@ jobs:
           # pages track it - topology creates a Deployment, capacity scales the
           # unschedulable fixture away and back.
           - scenario: observability
+            # Capacity scales the unschedulable fixture while topology counts
+            # pods - safe because topology compares against live kubectl rather
+            # than a remembered number, so a concurrent change is not a
+            # mismatch.
+            workers: 3
             sanity: true
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search
           # box in the header and the notification inbox behind the bell.
           - scenario: platform
+            # Search only reads; notifications only marks read. Nothing one
+            # does changes what the other asserts.
+            workers: 2
             sanity: true
             specs: tests/fleet-search.spec.ts tests/notifications.spec.ts
           # Its own cluster: this one RAISES an issue and then resolves it, so
@@ -436,6 +454,8 @@ jobs:
             # can run at once instead of one after another.
             workers: 3
           - scenario: diagnostics
+            # Diagnosis, log streaming and exec are independent of each other.
+            workers: 3
             specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           - scenario: admin
             specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
