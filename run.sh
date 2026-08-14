@@ -240,7 +240,10 @@ seed_workload() {
   $K create namespace "$DEMO_NS" --dry-run=client -o yaml | $K apply -f - >/dev/null
   $K -n "$DEMO_NS" create deployment "$DEMO_DEPLOY" --image=registry.k8s.io/pause:3.9 --replicas=2 \
     --dry-run=client -o yaml | $K apply -f - >/dev/null
-  $K -n "$DEMO_NS" rollout status "deploy/$DEMO_DEPLOY" --timeout=120s
+  # Generous on purpose. A slow image pull on a cold cluster is not a product
+  # failure, but a timeout here kills the whole job before a single test runs -
+  # which is how a published-variant run died at setup while main passed.
+  $K -n "$DEMO_NS" rollout status "deploy/$DEMO_DEPLOY" --timeout=300s
 
   # The wider fixture: several controller kinds, config and secrets, and three
   # deliberately broken workloads. Standing a cluster up costs minutes; giving
@@ -252,8 +255,8 @@ seed_workload() {
   # Wait only on what can actually become ready. broken-image and
   # unschedulable are MEANT to stay broken - waiting on them would hang the
   # harness for the exact reason the fixture exists.
-  $K -n "$FIXTURE_NS" rollout status deploy/storefront --timeout=180s
-  $K -n "$FIXTURE_NS" rollout status deploy/chatty --timeout=180s
+  $K -n "$FIXTURE_NS" rollout status deploy/storefront --timeout=300s
+  $K -n "$FIXTURE_NS" rollout status deploy/chatty --timeout=300s
 
   # And confirm the broken ones really are broken before any spec asserts on
   # them: a fixture that quietly started working would turn "the product failed
