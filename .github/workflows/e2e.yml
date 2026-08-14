@@ -234,22 +234,25 @@ jobs:
           # the shell job because two of them CHANGE the cluster to prove the
           # pages track it - topology creates a Deployment, capacity scales the
           # unschedulable fixture away and back.
-          - scenario: observability
-            # Capacity scales the unschedulable fixture while topology counts
-            # pods - safe because topology compares against live kubectl rather
-            # than a remembered number, so a concurrent change is not a
-            # mismatch.
-            workers: 3
+          # One cluster, eight specs, run four at a time.
+          #
+          # These were three separate jobs, each paying ~150s to build a
+          # cluster, install the charts and connect an agent before testing
+          # anything - three times the setup for work that fits on one cluster.
+          # Merged they pay it once and overlap the specs instead.
+          #
+          # Safe together because none of them changes what another asserts:
+          # capacity scales the unschedulable fixture while topology counts
+          # pods, which only works because topology compares against live
+          # kubectl rather than a number remembered before the change; search
+          # and the log/exec streams only read; notifications only marks read.
+          - scenario: insights
+            workers: 4
             sanity: true
-            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
+            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts tests/fleet-search.spec.ts tests/notifications.spec.ts tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search
           # box in the header and the notification inbox behind the bell.
-          - scenario: platform
-            # Search only reads; notifications only marks read. Nothing one
-            # does changes what the other asserts.
-            workers: 2
-            sanity: true
-            specs: tests/fleet-search.spec.ts tests/notifications.spec.ts
+
           # Its own cluster: this one RAISES an issue and then resolves it, so
           # any test counting issues alongside it would see the count move
           # underneath them.
@@ -259,10 +262,7 @@ jobs:
             # deployment, a TLS secret, and storefront's replica count - so they
             # can run at once instead of one after another.
             workers: 3
-          - scenario: diagnostics
-            # Diagnosis, log streaming and exec are independent of each other.
-            workers: 3
-            specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
+
           - scenario: admin
             specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
@@ -428,22 +428,25 @@ jobs:
           # the shell job because two of them CHANGE the cluster to prove the
           # pages track it - topology creates a Deployment, capacity scales the
           # unschedulable fixture away and back.
-          - scenario: observability
-            # Capacity scales the unschedulable fixture while topology counts
-            # pods - safe because topology compares against live kubectl rather
-            # than a remembered number, so a concurrent change is not a
-            # mismatch.
-            workers: 3
+          # One cluster, eight specs, run four at a time.
+          #
+          # These were three separate jobs, each paying ~150s to build a
+          # cluster, install the charts and connect an agent before testing
+          # anything - three times the setup for work that fits on one cluster.
+          # Merged they pay it once and overlap the specs instead.
+          #
+          # Safe together because none of them changes what another asserts:
+          # capacity scales the unschedulable fixture while topology counts
+          # pods, which only works because topology compares against live
+          # kubectl rather than a number remembered before the change; search
+          # and the log/exec streams only read; notifications only marks read.
+          - scenario: insights
+            workers: 4
             sanity: true
-            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts
+            specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts tests/fleet-search.spec.ts tests/notifications.spec.ts tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search
           # box in the header and the notification inbox behind the bell.
-          - scenario: platform
-            # Search only reads; notifications only marks read. Nothing one
-            # does changes what the other asserts.
-            workers: 2
-            sanity: true
-            specs: tests/fleet-search.spec.ts tests/notifications.spec.ts
+
           # Its own cluster: this one RAISES an issue and then resolves it, so
           # any test counting issues alongside it would see the count move
           # underneath them.
@@ -453,10 +456,7 @@ jobs:
             # deployment, a TLS secret, and storefront's replica count - so they
             # can run at once instead of one after another.
             workers: 3
-          - scenario: diagnostics
-            # Diagnosis, log streaming and exec are independent of each other.
-            workers: 3
-            specs: tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
+
           - scenario: admin
             specs: tests/settings.spec.ts tests/org-admin.spec.ts tests/org-truth.spec.ts tests/onboarding.spec.ts
           - scenario: gitops
