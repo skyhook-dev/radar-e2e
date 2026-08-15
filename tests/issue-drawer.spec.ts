@@ -1,5 +1,11 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited } from './helpers';
+import {
+  assertClusterConnected,
+  authStatePath,
+  captureSurface,
+  fleetJson,
+  gotoWhenNotRateLimited,
+} from './helpers';
 
 // The issue detail drawer - where triage actually happens.
 //
@@ -47,12 +53,10 @@ type FleetIssue = { kind: string; name: string; namespace: string; severity: str
 
 /** What the hub itself says is wrong, so the drawer can be held to it. */
 async function fleetIssues(page: Page): Promise<FleetIssue[]> {
-  return page
-    .evaluate(async () => {
-      const res = await fetch('/api/fleet/issues');
-      return res.ok ? ((await res.json()).issues ?? []) : [];
-    })
-    .catch(() => []);
+  // Waits out a 429 rather than reporting an empty fleet. The page polls these
+  // endpoints while this spec queries them, and they share one per-user budget.
+  const body = await fleetJson<{ issues?: FleetIssue[] }>(page, '/api/fleet/issues');
+  return body?.issues ?? [];
 }
 
 /** Everything the drawer says, from its first heading onwards. */

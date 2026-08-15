@@ -4,6 +4,7 @@ import {
   authStatePath,
   captureSurface,
   clusterId,
+  fleetJson,
   gotoWhenNotRateLimited,
   kubectl,
 } from './helpers';
@@ -47,13 +48,10 @@ type FleetIssue = { cluster_id: string; namespace: string; name: string; kind: s
 
 /** The fleet issues the hub is currently reporting, read through the app. */
 async function fleetIssues(page: Page): Promise<FleetIssue[]> {
-  return page
-    .evaluate(async () => {
-      const res = await fetch('/api/fleet/issues');
-      if (!res.ok) return [];
-      return (await res.json()).issues ?? [];
-    })
-    .catch(() => []);
+  // Waits out a 429: an empty fleet and a throttled request are different
+  // things, and this journey's detection poll cannot tell them apart otherwise.
+  const body = await fleetJson<{ issues?: FleetIssue[] }>(page, '/api/fleet/issues');
+  return body?.issues ?? [];
 }
 
 const ours = (issues: FleetIssue[]) =>

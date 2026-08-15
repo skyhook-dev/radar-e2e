@@ -392,3 +392,32 @@ export async function fleetGet(page: Page, path: string, timeout = 90_000) {
     await page.waitForTimeout(5000);
   }
 }
+
+/**
+ * Read a hub API endpoint from inside the page, waiting out the request budget.
+ *
+ * Several specs used to do `fetch(path)` and return `[]` when the response was
+ * not ok. That turns a 429 into "the hub has nothing", which is how a run
+ * reported "the hub reports no issues" on a cluster full of them - in one job
+ * 14 of 30 requests to /api/fleet/issues were throttled, and the page's own
+ * polling competes for the same per-user budget.
+ *
+ * Returns the parsed body, or null when the endpoint genuinely failed for a
+ * reason other than throttling. Callers should say which they got: an empty
+ * result and an unavailable endpoint are different findings.
+ */
+export async function fleetJson<T>(page: Page, path: string, timeout = 90_000): Promise<T | null> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const outcome = await page
+      .evaluate(async (p) => {
+        const res = await fetch(p);
+        return { status: res.status, body: res.ok ? await res.json() : null };
+      }, path)
+      .catch(() => ({ status: 0, body: null }));
+
+    if (outcome.status !== 429) return (outcome.body as T) ?? null;
+    if (Date.now() > deadline) return null;
+    await page.waitForTimeout(5000);
+  }
+}
