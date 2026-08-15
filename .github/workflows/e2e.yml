@@ -272,7 +272,11 @@ jobs:
           # kubectl rather than a number remembered before the change; search
           # and the log/exec streams only read; notifications only marks read.
           - scenario: insights
-            workers: 4
+            # Three, not four. Eight specs at four exhausted the hub's per-user
+            # request budget often enough that fleet search came back empty in
+            # four runs out of six - the specs were spending their turns
+            # queueing behind each other's rate limit rather than testing.
+            workers: 3
             sanity: true
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts tests/fleet-search.spec.ts tests/notifications.spec.ts tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search
@@ -488,7 +492,11 @@ jobs:
           # kubectl rather than a number remembered before the change; search
           # and the log/exec streams only read; notifications only marks read.
           - scenario: insights
-            workers: 4
+            # Three, not four. Eight specs at four exhausted the hub's per-user
+            # request budget often enough that fleet search came back empty in
+            # four runs out of six - the specs were spending their turns
+            # queueing behind each other's rate limit rather than testing.
+            workers: 3
             sanity: true
             specs: tests/topology.spec.ts tests/capacity.spec.ts tests/traffic-cost.spec.ts tests/fleet-search.spec.ts tests/notifications.spec.ts tests/diagnose.spec.ts tests/logs.spec.ts tests/exec.spec.ts
           # Cross-cutting surfaces that belong to no single domain: the search

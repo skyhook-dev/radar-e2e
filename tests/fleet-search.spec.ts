@@ -76,27 +76,72 @@ async function resultCount(page: Page): Promise<number> {
   return (await panelText(page)).split('\n').filter((l) => l.includes('·')).length;
 }
 
+/**
+ * Type a query and wait for the panel to settle, retrying only when the search
+ * request itself was rate limited.
+ *
+ * The fleet endpoints allow about 30 requests a minute per user, shared by
+ * every spec signed in as the same admin - and this box issues one request per
+ * keystroke. When that budget runs out the panel renders "No resources match",
+ * which is indistinguishable from a search that genuinely found nothing: it
+ * reported the fixture Deployment and Service as missing in four runs out of
+ * six, on both variants, while two of the three search requests in the job had
+ * come back 429.
+ *
+ * The retry is deliberately conditioned on having SEEN a 429. A search that
+ * returns 200 and no results still fails, which is what keeps the negative
+ * test honest.
+ */
 async function search(page: Page, term: string): Promise<string> {
   const box = searchBox(page);
   await expect(box, 'the fleet search box is not on the page').toBeVisible({ timeout: 45_000 });
-  await box.click();
-  await box.fill('');
 
-  // Typed key by key rather than filled. fill() sets the value in one shot and
-  // this box never queries: nothing reaches /api/fleet/search and the panel
-  // stays on its placeholder, which reads exactly like a search that finds
-  // nothing. Typing produces one request per keystroke, as a user would.
-  await box.pressSequentially(term, { delay: 60 });
+  let throttled = false;
+  let served = false;
+  const watch = (res: { url: () => string; status: () => number }) => {
+    if (!res.url().includes('/api/fleet/search')) return;
+    if (res.status() === 429) throttled = true;
+    else if (res.status() === 200) served = true;
+  };
+  page.on('response', watch);
 
-  // Settle on the panel rather than a fixed pause: results arrive per
-  // keystroke, so the last response is the one that matters.
-  let last = -1;
-  for (let i = 0; i < 12; i++) {
-    await page.waitForTimeout(1000);
-    const now = await resultCount(page);
-    if (now > 0 && now === last) break;
-    last = now;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      throttled = false;
+      served = false;
+
+      await box.click();
+      await box.fill('');
+      // Typed key by key rather than filled. fill() sets the value in one shot
+      // and this box never queries: nothing reaches /api/fleet/search and the
+      // panel stays on its placeholder, which reads exactly like a search that
+      // finds nothing.
+      await box.pressSequentially(term, { delay: 60 });
+
+      // Settle on the panel rather than a fixed pause: results arrive per
+      // keystroke, so the last response is the one that matters.
+      let last = -1;
+      for (let i = 0; i < 12; i++) {
+        await page.waitForTimeout(1000);
+        const now = await resultCount(page);
+        if (now > 0 && now === last) break;
+        last = now;
+      }
+
+      const found = await resultCount(page);
+      // Good answer, or an empty one the server actually served: either way
+      // that is the product's answer and the assertions should judge it.
+      if (found > 0 || (served && !throttled)) break;
+      if (!throttled) break;
+
+      // Throttled and empty: wait for the budget to come back rather than
+      // reporting the cluster's own resources as missing.
+      await page.waitForTimeout(20_000);
+    }
+  } finally {
+    page.off('response', watch);
   }
+
   return panelText(page);
 }
 
