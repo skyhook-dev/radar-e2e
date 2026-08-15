@@ -298,13 +298,17 @@ export async function walkTabs(
 export async function gotoWhenNotRateLimited(page: Page, path: string, timeout = 120_000) {
   const deadline = Date.now() + timeout;
   const rateLimited = async () =>
-    /Too Many Requests|rate limit/i.test(await page.evaluate(() => document.body.innerText).catch(() => ''));
+    /Too Many Requests|rate limit/i.test(
+      await page.evaluate(() => document.body.innerText).catch(() => ''),
+    );
 
   await page.goto(path);
+  // Backs off rather than retrying at a fixed pace. Every reload costs several
+  // fleet requests against the same 30/min budget it is waiting on, so a tight
+  // retry loop spends the allowance it is trying to recover - the wait gets
+  // longer the more the suite is being throttled, which is the point.
+  let wait = 5000;
   for (;;) {
-    // Checked twice, a beat apart. A page can render its shell cleanly and
-    // only then have one of its own fetches come back 429, so a single check
-    // straight after navigation clears a page that is about to show an error.
     if (!(await rateLimited())) {
       await page.waitForTimeout(2000);
       if (!(await rateLimited())) return;
@@ -315,31 +319,10 @@ export async function gotoWhenNotRateLimited(page: Page, path: string, timeout =
           `served this page, so nothing on it can be judged`,
       );
     }
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(wait);
+    wait = Math.min(wait * 2, 30_000);
     await page.reload();
   }
-}
-
-/**
- * The text of a summary card on the home dashboard, by the path it links to,
- * or 'NO CARD' when the dashboard has no such card.
- *
- * Excludes the primary navigation on purpose. The sidebar links to every
- * domain with the same href the dashboard card uses, and it comes FIRST in the
- * DOM - so `a[href="/certs"]` resolves to the nav item whose text is just
- * "Certs". Reading that instead of the card silently turns "does the card
- * react to a new certificate" into "does the word Certs still exist", which
- * passes no matter what the product does.
- */
-export async function dashboardCardText(page: Page, href: string): Promise<string> {
-  return page.evaluate((h) => {
-    const inNav = (e: Element) => !!e.closest('nav,[aria-label="Primary navigation"]');
-    const cards = [...document.querySelectorAll(`a[href^="${h}"]`)].filter((e) => !inNav(e));
-    if (!cards.length) return 'NO CARD';
-    // The richest one: a domain can be linked from a card and from a small
-    // "view all" affordance next to it.
-    return cards.map((e) => (e as HTMLElement).innerText.trim()).sort((a, b) => b.length - a.length)[0];
-  }, href);
 }
 
 /**
@@ -362,6 +345,10 @@ export async function waitForFleetReporting(page: Page, timeout = 120_000) {
       await page.evaluate(() => document.body.innerText).catch(() => ''),
     );
 
+  // Backs off for the same reason the navigation helper does: each reload
+  // spends several fleet requests, and a cluster that is not answering yet is
+  // not helped by being asked more often.
+  let wait = 5000;
   for (;;) {
     if (!(await notReporting())) return;
     if (Date.now() > deadline) {
@@ -370,7 +357,8 @@ export async function waitForFleetReporting(page: Page, timeout = 120_000) {
           `not serving, so nothing fleet-wide can be judged here`,
       );
     }
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(wait);
+    wait = Math.min(wait * 2, 30_000);
     await page.reload();
   }
 }
@@ -386,10 +374,12 @@ export async function waitForFleetReporting(page: Page, timeout = 120_000) {
  */
 export async function fleetGet(page: Page, path: string, timeout = 90_000) {
   const deadline = Date.now() + timeout;
+  let wait = 5000;
   for (;;) {
     const res = await page.request.get(path);
     if (res.status() !== 429 || Date.now() > deadline) return res;
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(wait);
+    wait = Math.min(wait * 2, 30_000);
   }
 }
 
@@ -408,6 +398,7 @@ export async function fleetGet(page: Page, path: string, timeout = 90_000) {
  */
 export async function fleetJson<T>(page: Page, path: string, timeout = 90_000): Promise<T | null> {
   const deadline = Date.now() + timeout;
+  let wait = 5000;
   for (;;) {
     const outcome = await page
       .evaluate(async (p) => {
@@ -418,6 +409,7 @@ export async function fleetJson<T>(page: Page, path: string, timeout = 90_000): 
 
     if (outcome.status !== 429) return (outcome.body as T) ?? null;
     if (Date.now() > deadline) return null;
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(wait);
+    wait = Math.min(wait * 2, 30_000);
   }
 }

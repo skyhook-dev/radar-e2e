@@ -160,7 +160,10 @@ test('a workload that breaks is detected and can be found everywhere the operato
         `${NAMESPACE}/${WORKLOAD} was created with an image that cannot be pulled, but no issue for it ever ` +
         `reached /api/fleet/issues - either radar did not detect it or the fan-out to the hub is broken`,
       timeout: 180_000,
-      intervals: [3000, 3000, 5000, 5000, 10_000],
+      // Widened deliberately: every one of these is a fleet request against a
+      // 30-per-minute budget the page is also drawing on, and detection takes
+      // as long as kubelet takes regardless of how often it is asked.
+      intervals: [5000, 10_000, 15_000],
     })
     .toBe(true);
 
