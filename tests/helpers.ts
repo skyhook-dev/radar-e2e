@@ -326,6 +326,28 @@ export async function gotoWhenNotRateLimited(page: Page, path: string, timeout =
 }
 
 /**
+ * The text of a summary card on the home dashboard, by the path it links to,
+ * or 'NO CARD' when the dashboard has no such card.
+ *
+ * Excludes the primary navigation on purpose. The sidebar links to every
+ * domain with the same href the dashboard card uses, and it comes FIRST in the
+ * DOM - so `a[href="/certs"]` resolves to the nav item whose text is just
+ * "Certs". Reading that instead of the card silently turns "does the card
+ * react to a new certificate" into "does the word Certs still exist", which
+ * passes no matter what the product does.
+ */
+export async function dashboardCardText(page: Page, href: string): Promise<string> {
+  return page.evaluate((h) => {
+    const inNav = (e: Element) => !!e.closest('nav,[aria-label="Primary navigation"]');
+    const cards = [...document.querySelectorAll(`a[href^="${h}"]`)].filter((e) => !inNav(e));
+    if (!cards.length) return 'NO CARD';
+    // The richest one: a domain can be linked from a card and from a small
+    // "view all" affordance next to it.
+    return cards.map((e) => (e as HTMLElement).innerText.trim()).sort((a, b) => b.length - a.length)[0];
+  }, href);
+}
+
+/**
  * Wait until the fleet endpoints actually have a cluster answering them.
  *
  * The hub can report a cluster as connected while its fleet queries still come
