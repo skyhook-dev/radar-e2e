@@ -726,7 +726,7 @@ jobs:
           specs: diagnose
     steps:
     - name: Checkout this harness
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Install kubectl-radar via the public quick-install script
       run: curl -fsSL https://get.radarhq.io | sh
     - name: Put the install location on PATH
@@ -756,13 +756,13 @@ jobs:
         test -s /tmp/kind || { echo "::error::could not download kind after 5 attempts"; exit 1; }
         sudo install -m 0755 /tmp/kind /usr/local/bin/kind
         kind version
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v7
       with:
-        node-version: 22
+        node-version: 24
         cache: npm
         cache-dependency-path: dist/cli-e2e/package-lock.json
     - name: Cache Playwright browsers
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/ms-playwright
         key: playwright-cli-e2e-${{ runner.os }}-${{ hashFiles('dist/cli-e2e/package-lock.json') }}
@@ -782,7 +782,7 @@ jobs:
       run: ./run.sh logs > diagnostics.txt 2>&1 || true
     - name: Upload Playwright report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: cli-e2e-${{ matrix.scenario }}
         path: 'cli-e2e/playwright-report/

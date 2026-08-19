@@ -18,7 +18,7 @@ level. This is the browser-level counterpart and does not repeat those scenarios
 
 | Requirement | Why |
 |---|---|
-| docker, kind, kubectl, helm, node 22 | build images, run the cluster, install the chart |
+| docker, kind, kubectl, helm, node 24 | build images, run the cluster, install the chart |
 | `RADAR_HUB_LICENSE` | without a license the hub serves a license-required screen and nothing is testable |
 | checkouts of `radar-hub-web`, `helm-charts`, `radar` | images are built from source; the chart is installed from the source tree |
 | jq | the harness talks to the hub API to register a cluster and mint its token |
