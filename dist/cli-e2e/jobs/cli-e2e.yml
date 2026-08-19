@@ -49,7 +49,7 @@ jobs:
             specs: diagnose
     steps:
       - name: Checkout this harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The same command a Linux user runs from the README - not a pinned
       # release-asset download. Pinning to the resolved tag would test that
@@ -73,14 +73,14 @@ jobs:
         with:
           install_only: true
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: cli-e2e/package-lock.json
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-cli-e2e-${{ runner.os }}-${{ hashFiles('cli-e2e/package-lock.json') }}
@@ -106,7 +106,7 @@ jobs:
       # it on this release.
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-e2e-${{ matrix.scenario }}
           path: |
