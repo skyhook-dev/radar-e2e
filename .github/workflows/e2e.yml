@@ -76,7 +76,7 @@ jobs:
       # The App must be installed on both.
       - name: Mint a scoped token for the private repos
         id: private_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.GH_E2E_APP_ID }}
           private-key: ${{ secrets.GH_E2E_APP_PK }}
@@ -86,13 +86,13 @@ jobs:
             radar-hub-web
 
       - name: Checkout this harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Every repo under test goes under the workspace: actions/checkout
       # refuses any path outside it. run.sh reads their locations from the
       # *_DIR variables set on the run step.
       - name: Checkout radar-hub
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-dev/radar-hub
           ref: ${{ inputs.hub_ref || 'main' }}
@@ -100,7 +100,7 @@ jobs:
           path: .e2e-repos/radar-hub
 
       - name: Checkout radar-hub-web
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-dev/radar-hub-web
           ref: ${{ inputs.web_ref || 'main' }}
@@ -110,14 +110,14 @@ jobs:
       # radar and helm-charts are public, so the default job token reads them
       # fine - they are in skyhook-io, which the App above is not installed on.
       - name: Checkout radar
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/radar
           ref: ${{ inputs.radar_ref || 'main' }}
           path: .e2e-repos/radar
 
       - name: Checkout helm-charts
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/helm-charts
           ref: ${{ inputs.charts_ref || 'main' }}
@@ -132,10 +132,10 @@ jobs:
       # Images are built here rather than in run.sh so the layer cache is
       # shared across scheduled runs. A cold build of all three is the bulk of
       # this job's wall clock; run.sh skips its own build via SKIP_BUILD.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build hub image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .e2e-repos/radar-hub
           load: true
@@ -144,7 +144,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=e2e-hub
 
       - name: Build web image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .e2e-repos/radar-hub-web
           load: true
@@ -155,7 +155,7 @@ jobs:
       # radar's last Dockerfile stage is `release`, which expects
       # goreleaser-built binaries in the context - `full` is the from-source one.
       - name: Build radar image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .e2e-repos/radar
           target: full
@@ -171,7 +171,7 @@ jobs:
         run: docker save radar-hub:e2e radar-hub-web:e2e radar:e2e | gzip > images.tar.gz
 
       - name: Upload images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-images
           path: images.tar.gz
@@ -301,17 +301,17 @@ jobs:
             specs: tests/multi-cluster.spec.ts
     steps:
       - name: Checkout this harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Checkout radar
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/radar
           ref: ${{ inputs.radar_ref || 'main' }}
           path: .e2e-repos/radar
 
       - name: Checkout helm-charts
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/helm-charts
           ref: ${{ inputs.charts_ref || 'main' }}
@@ -319,7 +319,7 @@ jobs:
 
       - name: Download images
         if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: e2e-images
 
@@ -353,15 +353,15 @@ jobs:
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           kind version
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Cache Playwright browsers
         if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
@@ -403,7 +403,7 @@ jobs:
       # the timeline actually rendered.
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-main-${{ matrix.scenario }}
           path: |
@@ -521,17 +521,17 @@ jobs:
             specs: tests/multi-cluster.spec.ts
     steps:
       - name: Checkout this harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Checkout radar
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/radar
           ref: ${{ inputs.radar_ref || 'main' }}
           path: .e2e-repos/radar
 
       - name: Checkout helm-charts
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: skyhook-io/helm-charts
           ref: ${{ inputs.charts_ref || 'main' }}
@@ -563,15 +563,15 @@ jobs:
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           kind version
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Cache Playwright browsers
         if: ${{ github.event.inputs.scope != 'sanity' || matrix.sanity }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
@@ -613,7 +613,7 @@ jobs:
       # the timeline actually rendered.
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-published-${{ matrix.scenario }}
           path: |
@@ -703,15 +703,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout this harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
 
       # One step pulls every scenario artifact from both variants.
       - name: Download all scenario artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: playwright-*
           path: artifacts
@@ -728,7 +728,7 @@ jobs:
             "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Upload the visual review
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: visual-review
           path: gallery/
