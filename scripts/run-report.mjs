@@ -108,6 +108,16 @@ try {
     if (!existsSync(results)) continue;
 
     console.log(`\n=== ${artifact} ===`);
+
+    // What this job actually installed. The pair is the thing that breaks: a
+    // published hub is pinned while published radar floats to the newest
+    // release, so a run can go red because of a release nobody here made.
+    const versions = path.join(dir, artifact, 'versions.txt');
+    if (existsSync(versions)) {
+      for (const line of readFileSync(versions, 'utf8').split('\n').filter(Boolean)) {
+        console.log(`  ${line}`);
+      }
+    }
     const report = JSON.parse(readFileSync(results, 'utf8'));
     const walk = (suite) => {
       for (const child of suite.suites ?? []) walk(child);

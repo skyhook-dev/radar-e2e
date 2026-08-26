@@ -397,6 +397,7 @@ jobs:
         run: |
           ./run.sh logs > diagnostics.txt 2>&1 || true
           cp .run/port-forward.log port-forward.log 2>/dev/null || true
+          cp .run/versions.txt versions.txt 2>/dev/null || true
 
       # Uploaded on success too: the report carries the timeline screenshot and
       # the matched event rows, which are the only proof anyone can look at that
@@ -412,6 +413,7 @@ jobs:
             visual/
             diagnostics.txt
             port-forward.log
+            versions.txt
           retention-days: 7
 
       # Tolerant on purpose: when the job fails before kind is installed there
@@ -607,6 +609,7 @@ jobs:
         run: |
           ./run.sh logs > diagnostics.txt 2>&1 || true
           cp .run/port-forward.log port-forward.log 2>/dev/null || true
+          cp .run/versions.txt versions.txt 2>/dev/null || true
 
       # Uploaded on success too: the report carries the timeline screenshot and
       # the matched event rows, which are the only proof anyone can look at that
@@ -622,6 +625,7 @@ jobs:
             visual/
             diagnostics.txt
             port-forward.log
+            versions.txt
           retention-days: 7
 
       # Tolerant on purpose: when the job fails before kind is installed there

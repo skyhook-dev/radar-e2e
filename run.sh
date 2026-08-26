@@ -327,6 +327,8 @@ connect_cluster() {
     --wait --timeout 10m >/dev/null
   $K -n "$RADAR_NS" rollout status deploy/radar --timeout=300s
 
+  record_versions_under_test
+
   say "wait for the tunnel to report connected"
   local status=""
   for _ in $(seq 1 40); do
@@ -427,6 +429,33 @@ dump_diagnostics() {
   # apart from an alert that fired and was never delivered - the two look
   # identical from the outside, and neither is visible in a pod log alone.
   dump_hub_state
+}
+
+# Write down which hub and which radar this run actually installed.
+#
+# Worth its own file because the pair is the thing that breaks. A published hub
+# is pinned while the published radar floats to whatever shipped most recently,
+# so a run can go red because of a release nobody here made - and working that
+# out afterwards meant digging through job logs. radar 1.11.0 against hub 1.4.0
+# cost six days of red runs before anyone knew that was the combination.
+record_versions_under_test() {
+  local file="$DIR/.run/versions.txt"
+  {
+    echo "variant: ${VARIANT}"
+    helm -n "$NS" list -o json 2>/dev/null \
+      | python3 -c 'import json,sys
+for r in json.load(sys.stdin):
+    print(f"hub: chart {r[\"chart\"]}, app {r.get(\"app_version\",\"?\")}")' 2>/dev/null || true
+    helm -n "$RADAR_NS" list -o json 2>/dev/null \
+      | python3 -c 'import json,sys
+for r in json.load(sys.stdin):
+    print(f"radar: chart {r[\"chart\"]}, app {r.get(\"app_version\",\"?\")}")' 2>/dev/null || true
+    $K -n "$NS" get deploy -o jsonpath='{range .items[*]}hub image: {.spec.template.spec.containers[0].image}{"\n"}{end}' 2>/dev/null || true
+    $K -n "$RADAR_NS" get deploy -o jsonpath='{range .items[*]}radar image: {.spec.template.spec.containers[0].image}{"\n"}{end}' 2>/dev/null || true
+  } > "$file" 2>&1
+
+  say "under test:"
+  sed 's/^/  /' "$file"
 }
 
 # Authenticated GETs against the running hub, dumped as JSON.
