@@ -115,6 +115,82 @@ helm_retry() {
   return 1
 }
 
+# The public images the fixtures and specs run: a container that starts and
+# idles, and one that can run a shell. Everything else on the cluster is either
+# built here or carried by the kind node image.
+FIXTURE_IMAGES="registry.k8s.io/pause:3.9 mirror.gcr.io/library/busybox:1.36"
+
+# Put those images on the node once, up front, instead of letting each pod pull
+# its own. A registry that is briefly unreachable otherwise takes down a whole
+# scenario in setup, before a single spec runs: registry.k8s.io answered one
+# runner's pause pull with 403 for long enough to exhaust the demo workload's
+# 300s rollout wait, while every other job in the same run pulled it fine.
+# Staged here, the kubelet finds them already present - a tagged image defaults
+# to imagePullPolicy: IfNotPresent - and never calls out at all.
+stage_fixture_images() {
+  say "stage fixture images into the cluster"
+  local nodes node img
+  # Every node, not just the control plane: this cluster has one today, and a
+  # pod scheduled onto a node that was skipped would pull the image itself,
+  # which is the thing being avoided.
+  nodes="$(kind get nodes --name "$CLUSTER")"
+  for img in $FIXTURE_IMAGES; do
+    for node in $nodes; do
+      if node_has_image "$node" "$img"; then
+        echo "  $img already on $node"
+      elif pull_image "$img" && import_image "$node" "$img"; then
+        echo "  staged $img on $node"
+      elif tag_node_pause_as "$node" "$img"; then
+        : # tag_node_pause_as explains itself
+      else
+        echo "  WARNING: could not stage $img on $node - the pods that need it will try to" \
+             "pull it themselves, and the rollout waits below are what will fail if they cannot" >&2
+      fi
+    done
+  done
+}
+
+node_has_image() {
+  docker exec "$1" ctr -n k8s.io images ls -q 2>/dev/null | grep -qxF "$2"
+}
+
+# docker save | ctr import rather than `kind load docker-image`: kind imports
+# with --all-platforms, which fails on a multi-architecture image whose other
+# platforms the local daemon never pulled, with
+#   ctr: content digest sha256:...: not found
+# Kept as a condition so a failure here falls through to the fallback below
+# instead of taking the script down with it.
+import_image() {
+  docker save "$2" | docker exec -i "$1" ctr -n k8s.io images import - >/dev/null 2>&1
+}
+
+pull_image() {
+  local img="$1" attempt
+  for attempt in 1 2 3; do
+    if docker pull -q "$img" >/dev/null 2>&1; then return 0; fi
+    if [ "$attempt" -lt 3 ]; then sleep $((attempt * 5)); fi
+  done
+  return 1
+}
+
+# Last resort for a registry we cannot reach at all, and only for pause: the
+# kind node image already carries one for pod sandboxes, so tag that under the
+# reference the fixtures ask for. What the fixtures need from pause is a
+# container that starts and idles, which every build of it does identically.
+# The tag will then name a version that is not the one running, so this says so
+# rather than passing silently.
+tag_node_pause_as() {
+  local node="$1" img="$2" node_pause
+  case "$img" in registry.k8s.io/pause:*) ;; *) return 1 ;; esac
+  node_pause="$(docker exec "$node" ctr -n k8s.io images ls -q 2>/dev/null \
+    | grep -E '^registry\.k8s\.io/pause:[0-9]' | head -1)"
+  [ -n "$node_pause" ] || return 1
+  docker exec "$node" ctr -n k8s.io images tag "$node_pause" "$img" >/dev/null 2>&1 || return 1
+  echo "  WARNING: could not pull $img; tagged the node's own $node_pause as it instead." \
+       "The fixtures only need a container that starts and idles, but anything reading that" \
+       "tag is now reading a version that is not what runs." >&2
+}
+
 say() { printf "\n\033[36m== %s ==\033[0m\n" "$*"; }
 die() { printf "\033[31m%s\033[0m\n" "$*" >&2; exit 1; }
 
@@ -156,6 +232,7 @@ up() {
   if [ "$VARIANT" != "published" ]; then
     kind load docker-image radar-hub:e2e radar-hub-web:e2e radar:e2e --name "$CLUSTER"
   fi
+  stage_fixture_images
 
   # The chart pins pods to amd64 nodes. A kind node inherits the host
   # architecture, so on Apple Silicon that selector leaves every pod Pending.

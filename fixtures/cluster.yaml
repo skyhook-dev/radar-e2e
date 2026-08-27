@@ -11,10 +11,12 @@
 # "this exact object appears with these exact attributes" against something it
 # did not have to build first.
 #
-# Images are registry.k8s.io/pause and busybox on purpose: tiny, already in the
-# kind node cache, and they do not phone home. The deliberately-broken
-# workloads use image tags that cannot resolve, which is what makes them fail
-# in a way the product should notice and report.
+# Images are registry.k8s.io/pause and busybox on purpose: tiny, staged onto the
+# node by run.sh before any of this is applied, and they do not phone home.
+# busybox comes from mirror.gcr.io rather than Docker Hub, which is what the
+# specs that build their own pods already do. The deliberately-broken workloads
+# use image tags that cannot resolve, which is what makes them fail in a way
+# the product should notice and report.
 ---
 apiVersion: v1
 kind: Namespace
@@ -228,7 +230,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: busybox:1.36
+          image: mirror.gcr.io/library/busybox:1.36
           command: ["sh", "-c", "echo migration complete"]
 ---
 apiVersion: batch/v1
@@ -245,7 +247,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: report
-              image: busybox:1.36
+              image: mirror.gcr.io/library/busybox:1.36
               command: ["sh", "-c", "echo report"]
 ---
 # A pod that logs continuously, so log streaming has a live source that keeps
@@ -267,7 +269,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: busybox:1.36
+          image: mirror.gcr.io/library/busybox:1.36
           command:
             - sh
             - -c
