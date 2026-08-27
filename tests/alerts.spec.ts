@@ -113,6 +113,34 @@ test.beforeAll(() => {
   if (existing !== NAMESPACE) kubectl('create', 'namespace', NAMESPACE);
 });
 
+// A new rule opens with "Include AI analysis" ticked, and the AI disclosure is
+// raised by Save rather than by the checkbox, so saving one in an org that has
+// never consented stacks a second dialog on the rule dialog instead of closing
+// it. Allow it: consent is granted org-wide and the save continues in the same
+// click.
+//
+// The gate is optional rather than expected - the released build the
+// `published` variant installs doesn't have it, and an org only sees it until
+// it consents once - so this waits for the save to resolve into EITHER shape
+// instead of waiting out a timeout on a dialog that may never come. The
+// caller still asserts that the dialogs are gone afterwards; this only gets
+// them there.
+async function allowAnalysisIfAsked(page: Page) {
+  const allow = page.getByRole('button', { name: 'Allow automatic analysis' });
+  await expect
+    .poll(
+      async () => {
+        if (await allow.isVisible()) return 'gate';
+        return (await page.getByRole('dialog').count()) === 0 ? 'saved' : 'open';
+      },
+      { message: 'Create rule neither saved the rule nor raised the AI analysis disclosure' },
+    )
+    .not.toBe('open');
+
+  // Nothing dismisses the gate on its own, so once it is up the click is safe.
+  if (await allow.isVisible()) await allow.click();
+}
+
 test('an alert rule can be created through the UI, appears in the rules list, and survives a page load', async ({
   page,
 }, testInfo) => {
@@ -129,18 +157,21 @@ test('an alert rule can be created through the UI, appears in the rules list, an
   await expect(openDialog.first(), 'no control to open the new-rule dialog').toBeVisible();
   await openDialog.first().click();
 
-  const dialog = page.getByRole('dialog');
+  // Identify the rule dialog by the field only it has, so a second dialog
+  // stacked on top of it (see the consent gate below) can never make this
+  // ambiguous.
+  const dialog = page
+    .getByRole('dialog')
+    .filter({ has: page.getByPlaceholder('Notify on critical issues') });
   await expect(dialog, 'rule dialog never opened').toBeVisible();
 
   await dialog.getByPlaceholder('Notify on critical issues').fill(ruleName);
   // Scope to our own namespace so this rule can never fire on another
   // agent's workload elsewhere in the shared cluster.
-  await dialog
-    .locator('label', { hasText: 'Namespaces' })
-    .locator('xpath=following-sibling::input')
-    .fill(NAMESPACE);
+  await dialog.getByPlaceholder('all namespaces').fill(NAMESPACE);
 
   await dialog.getByRole('button', { name: 'Create rule' }).click();
+  await allowAnalysisIfAsked(page);
   await expect(page.getByRole('dialog'), 'rule dialog stayed open after Create rule').toHaveCount(0);
 
   let ruleId: string | undefined;
@@ -148,17 +179,22 @@ test('an alert rule can be created through the UI, appears in the rules list, an
     const row = page.getByRole('listitem').filter({ hasText: ruleName });
     await expect(row.first(), `"${ruleName}" never appeared in the rules list after creating it`).toBeVisible();
 
-    ruleId = (await row.first().locator('span.font-mono').first().textContent())?.trim();
-    expect(ruleId, 'could not read the created rule id off its row').toBeTruthy();
-
     // Ground truth: the row must correspond to a real server-side rule, not
-    // just optimistic UI state.
+    // just optimistic UI state. The id comes from the API and the row is
+    // asked to show it, rather than the other way round - that direction
+    // proves the same thing without depending on how the row is marked up.
     const res = await page.request.get(`/api/orgs/${orgId}/alerts/rules`);
     expect(res.status(), 'alert rules endpoint').toBe(200);
     const rules = (await res.json()).rules as AlertRule[];
-    const apiRule = rules.find((r) => r.id === ruleId);
-    expect(apiRule, `rule ${ruleId} shown in the UI is missing from GET .../alerts/rules`).toBeTruthy();
-    expect(apiRule?.name).toBe(ruleName);
+    const apiRule = rules.find((r) => r.name === ruleName);
+    if (!apiRule) {
+      throw new Error(`rule "${ruleName}" is in the rules list but missing from GET .../alerts/rules`);
+    }
+    ruleId = apiRule.id;
+    await expect(
+      row.first(),
+      `the rules list row for "${ruleName}" does not show the id of the rule the server stored (${ruleId})`,
+    ).toContainText(ruleId);
 
     // Survives a page load: a full navigation (not a reload inside a poll
     // loop), then the row must still be there without any client-side help.
