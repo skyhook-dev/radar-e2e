@@ -385,12 +385,23 @@ test('the rules list and its edit dialog render exactly the rule configuration s
     const inboxCheckbox = dialog.locator('label', { hasText: 'In-app inbox' }).locator('input[type="checkbox"]');
     await expect(inboxCheckbox, 'edit dialog does not show inbox delivery as checked').toBeChecked();
 
+    // Two shapes, because the suite runs this test against two builds. On main
+    // the toggle is a button carrying role="switch" and aria-checked; the
+    // published release still renders a checkbox inside a label. Exactly one of
+    // them exists in any given build, so awaiting either keeps both variants
+    // honest without asserting anything weaker. toBeChecked reads aria-checked
+    // for role="switch" and .checked for the input, so the assertion below is
+    // the same assertion either way. Drop the checkbox arm once a release
+    // carrying the switch is the published one.
     const resolveToggle = dialog
-      .locator('label', { hasText: 'Notify when issues resolve' })
-      .locator('input[type="checkbox"]');
+      .getByRole('switch', { name: 'Notify when issues resolve' })
+      .or(dialog.locator('label', { hasText: 'Notify when issues resolve' }).locator('input[type="checkbox"]'));
+    // Presence first. Folded into the state assertion below, a control that has
+    // gone missing reports as a wrong value, which sends the reader to the API.
+    await expect(resolveToggle, 'edit dialog has no "Notify when issues resolve" toggle').toBeVisible();
     await expect(
       resolveToggle,
-      'edit dialog shows "Notify when issues resolve" checked, but the rule was created with notify_on_resolve=false',
+      'edit dialog shows "Notify when issues resolve" on, but the rule was created with notify_on_resolve=false',
     ).not.toBeChecked();
 
     // Element shot, not the page: a dialog photographed with all the chrome
