@@ -246,20 +246,25 @@ test('tabs whose data source is missing say so, and stop waiting', async ({ page
 
   await page.getByRole('tab', { name: /^\s*Cost/i }).click();
 
-  // The Cost tab opens on "Looking for Prometheus cost data... First discovery
-  // can take a few seconds". Prometheus is not installed and never will be, so
+  // The Cost tab opens on a discovery spinner: "Looking for cost data... First
+  // discovery can take a few seconds". The released build says "Looking for
+  // Prometheus cost data..." instead - it only knew one source, and Kubecost 3
+  // support dropped the source name from the heading. Both builds are tested
+  // here, so match either wording.
+  //
+  // Neither source is installed on this cluster and neither ever will be, so
   // discovery must end in an answer. A spinner still turning long after the
   // "few seconds" it promises is indistinguishable from a hung request.
-  const stillSearching = page.getByText(/looking for prometheus cost data/i);
+  const stillSearching = page.getByText(/looking for (prometheus )?cost data/i);
   await expect(
     stillSearching,
-    'the Cost tab never even started discovery - expected it to look for Prometheus first',
+    'the Cost tab never even started discovery - expected it to look for a cost source first',
   ).toBeVisible({ timeout: 20_000 });
 
   await expect
     .soft(
       stillSearching,
-      'the Cost tab was still showing "Looking for Prometheus cost data..." 90s after opening, on a cluster with no Prometheus. It promises "a few seconds"; a spinner that never resolves cannot be told apart from a hung request, and the Metrics tab answers the same question immediately',
+      'the Cost tab was still looking for cost data 90s after opening, on a cluster with no Prometheus and no Kubecost. It promises "a few seconds"; a spinner that never resolves cannot be told apart from a hung request, and the Metrics tab answers the same question immediately',
     )
     .toBeHidden({ timeout: 90_000 });
 
