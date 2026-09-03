@@ -18,8 +18,9 @@ import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateL
 // Read off the running product before being written:
 //  - Traffic prints "Cluster Detection | Platform: kind | CNI: unknown" and
 //    recommends Caretta, describing it as eBPF-based and CNI-independent.
-//  - Cost has Overview and Rightsizing tabs, says "Looking for Prometheus cost
-//    data…", explains the port-forward discovery, and offers "Check again".
+//  - Cost has Overview and Rightsizing tabs, says "Looking for cost data…"
+//    (the released build still names Prometheus in that heading), explains the
+//    discovery it is doing, and offers "Check again".
 
 test.use({ storageState: authStatePath });
 test.setTimeout(240_000);
