@@ -37,7 +37,12 @@ import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateL
 // and the restart are already paid for here.
 
 test.use({ storageState: authStatePath });
-test.setTimeout(420_000);
+// Deliberately short. Each failure previously burned the full timeout twice
+// over (once per retry), and two of them took the job past the 30-minute
+// ceiling in .github/workflows/e2e.yml, so the run was cancelled before
+// Playwright could even print why. A spec that cannot explain its own failure
+// inside the budget is worse than no spec.
+test.setTimeout(150_000);
 
 const NS = 'e2e-crd';
 const GROUP = 'e2e.skyhook.io';
@@ -217,24 +222,64 @@ async function openResources(page: Page) {
     .toBeGreaterThan(3);
 }
 
-/** Click into the Widget kind and wait for its rows to arrive. */
+/**
+ * What the resource table is actually showing, for failure messages.
+ *
+ * Without this a locator that matches nothing reports only "expected > 0",
+ * which is what turned the first two attempts at this spec into guesswork.
+ */
+async function tableSnapshot(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const headers = Array.from(document.querySelectorAll('thead th'), (th) =>
+      (th as HTMLElement).innerText.trim(),
+    ).filter(Boolean);
+    const rows = Array.from(document.querySelectorAll('tbody tr'), (tr) =>
+      (tr as HTMLElement).innerText.replace(/\s+/g, ' ').trim(),
+    ).slice(0, 5);
+    return `columns: [${headers.join(' | ')}] rows: ${rows.length ? rows.join(' // ') : '(none)'}`;
+  });
+}
+
+/**
+ * Click into the Widget kind and wait for its rows.
+ *
+ * The sidebar entry's text is "Widget\n3" and the newline is normalised to a
+ * space in the accessible name, so the name regex has to allow whitespace
+ * rather than anchor on the newline - resource-inventory.spec.ts carries the
+ * same note, and ignoring it is how the first attempt here hung on a locator
+ * that matched nothing.
+ */
 async function openWidgetKind(page: Page) {
   await openResources(page);
 
-  const entry = page.getByRole('button', { name: new RegExp(`^\\s*${KIND}\\b`) }).first();
+  const entry = page.getByRole('button', { name: new RegExp(`^${KIND}\\s+\\d+$`) }).first();
   await expect(
     entry,
     `the Resources sidebar never offered the ${KIND} kind, so Radar is not surfacing a CRD it has no curated renderer for`,
-  ).toBeVisible({ timeout: 60_000 });
+  ).toBeVisible({ timeout: 45_000 });
   await entry.click();
 
   await expect
-    .poll(async () => page.locator('table tbody tr').count(), {
+    .poll(async () => page.locator('tbody tr').count(), {
       message: `selecting ${KIND} never rendered any rows`,
-      timeout: 60_000,
+      timeout: 45_000,
       intervals: [1000, 2000, 3000],
     })
     .toBeGreaterThan(0);
+}
+
+/** Narrow the table to one object, the way resource-inventory.spec.ts does. */
+async function searchFor(page: Page, name: string) {
+  const search = page.getByPlaceholder('Search... (press /)').first();
+  await expect(search, 'the resource table has no search box').toBeVisible({ timeout: 30_000 });
+  await search.fill(name);
+  await expect
+    .poll(async () => page.locator('tbody tr').filter({ hasText: name }).count(), {
+      timeout: 30_000,
+      intervals: [1000, 2000],
+    })
+    .toBeGreaterThan(0)
+    .catch(() => {});
 }
 
 test.beforeAll(() => {
@@ -310,16 +355,18 @@ test('selecting the custom kind lists exactly the objects the cluster has', asyn
     .filter(Boolean)
     .map((line) => line.split('/').pop() as string)
     .sort();
+  expect(expected.length, `${NS} has no Widgets to check against`).toBe(WIDGETS.length);
 
-  const listed = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('table tbody tr'), (tr) => (tr as HTMLElement).innerText),
-  );
-
-  const missing = expected.filter((name) => !listed.some((row) => row.includes(name)));
-  expect(
-    missing,
-    `the ${KIND} list is missing objects the cluster has: ${missing.join(', ')}. A list that silently drops custom resources reads as "the operator created nothing"`,
-  ).toEqual([]);
+  for (const name of expected) {
+    await searchFor(page, name);
+    const listed = await page.locator('tbody tr').filter({ hasText: name }).count();
+    expect
+      .soft(
+        listed,
+        `${NS}/${name} is a ${KIND} in this cluster but the Resources table does not list it. A list that silently drops custom resources reads as "the operator created nothing". On screen: ${await tableSnapshot(page)}`,
+      )
+      .toBeGreaterThan(0);
+  }
 
   await captureSurface(page, testInfo, 'crd-objects-listed');
 });
@@ -332,7 +379,7 @@ test("a custom kind renders its own printer columns, with the API server's value
   //    CRD's own additionalPrinterColumns.
   const headers = (
     await page.evaluate(() =>
-      Array.from(document.querySelectorAll('table thead th'), (th) => (th as HTMLElement).innerText.trim()),
+      Array.from(document.querySelectorAll('thead th'), (th) => (th as HTMLElement).innerText.trim()),
     )
   ).map((h) => h.toLowerCase());
 
@@ -350,9 +397,13 @@ test("a custom kind renders its own printer columns, with the API server's value
   //    another object's value cannot pass.
   for (const widget of WIDGETS) {
     const truth = widgetFromCluster(widget.name);
-    const row = page.locator('table tbody tr', { hasText: widget.name }).first();
+    await searchFor(page, widget.name);
+    const row = page.locator('tbody tr').filter({ hasText: widget.name }).first();
 
-    await expect(row, `no row for ${widget.name}`).toBeVisible({ timeout: 30_000 });
+    await expect(
+      row,
+      `no row for ${widget.name}. On screen: ${await tableSnapshot(page)}`,
+    ).toBeVisible({ timeout: 30_000 });
     const text = ((await row.innerText()) ?? '').replace(/\s+/g, ' ');
 
     expect
