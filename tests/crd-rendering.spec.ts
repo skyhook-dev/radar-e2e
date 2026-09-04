@@ -252,6 +252,19 @@ async function tableSnapshot(page: Page): Promise<string> {
 async function openWidgetKind(page: Page) {
   await openResources(page);
 
+  // Narrow the sidebar with its own kind filter before clicking.
+  //
+  // Not a convenience: the sidebar groups kinds by API group under headers
+  // that overlap the list while scrolling, and clicking an entry further down
+  // fails with the header intercepting the pointer - "Dynamic Resource
+  // Allocation ... subtree intercepts pointer events", which cost this spec a
+  // full CI round. Filtering first is also what a person does to find one kind
+  // among a hundred, and the input carries the same placeholder on both the
+  // build from main and the published release.
+  const kindFilter = page.getByPlaceholder('Filter resources...').first();
+  await expect(kindFilter, 'the Resources sidebar has no kind filter').toBeVisible({ timeout: 30_000 });
+  await kindFilter.fill(KIND);
+
   const entry = page.getByRole('button', { name: new RegExp(`^${KIND}\\s+\\d+$`) }).first();
   await expect(
     entry,
