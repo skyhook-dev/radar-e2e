@@ -51,6 +51,12 @@ const KIND = 'Widget';
 const CRD_NAME = `${PLURAL}.${GROUP}`;
 const RBAC_NAME = 'e2e-crd-rendering-reader';
 
+// run.sh takes RADAR_NS (defaulting to 'radar') and exports it to Playwright,
+// so the agent is not always in a namespace called 'radar'. Hardcoding it would
+// read the wrong ServiceAccount, bind the grant to the wrong subject, and
+// restart the wrong deployment.
+const RADAR_NS = process.env.RADAR_NS ?? 'radar';
+
 // The published half of the matrix installs the released hub, whose bundled UI
 // is the @skyhook-io/radar-app npm package - not the radar image. Hub 1.5.0
 // pins radar-app ^1.11.0, and rendering a CRD through its own
@@ -288,18 +294,34 @@ async function openWidgetKind(page: Page) {
     .toBeGreaterThan(0);
 }
 
-/** Narrow the table to one object, the way resource-inventory.spec.ts does. */
-async function searchFor(page: Page, name: string) {
-  const search = page.getByPlaceholder('Search... (press /)').first();
-  await expect(search, 'the resource table has no search box').toBeVisible({ timeout: 30_000 });
-  await search.fill(name);
-  await expect
-    .poll(async () => page.locator('tbody tr').filter({ hasText: name }).count(), {
-      timeout: 30_000,
-      intervals: [1000, 2000],
-    })
-    .toBeGreaterThan(0)
-    .catch(() => {});
+/**
+ * The table as rows of {column -> cell}, so a value can be checked in the cell
+ * it belongs to.
+ *
+ * Matching a value anywhere in the flattened row is not good enough: a replica
+ * count of 7 also matches an age of "7m", so a column that dropped its value
+ * entirely could still pass.
+ */
+async function rowsByColumn(page: Page): Promise<Array<Record<string, string>>> {
+  return page.evaluate(() => {
+    const headers = Array.from(document.querySelectorAll('thead th'), (th) =>
+      (th as HTMLElement).innerText.trim().toLowerCase(),
+    );
+    return Array.from(document.querySelectorAll('tbody tr'), (tr) => {
+      const cells = Array.from(tr.querySelectorAll('td'), (td) => (td as HTMLElement).innerText.trim());
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        if (h) row[h] = cells[i] ?? '';
+      });
+      return row;
+    });
+  });
+}
+
+/** The cell under the first column whose header mentions `column`. */
+function cell(row: Record<string, string>, column: string): string | undefined {
+  const key = Object.keys(row).find((h) => h.includes(column.toLowerCase()));
+  return key === undefined ? undefined : row[key];
 }
 
 test.beforeAll(() => {
@@ -310,11 +332,11 @@ test.beforeAll(() => {
   // namespace off the running deployment rather than hardcoding them - the
   // chart templates both names.
   const sa = kubectl(
-    '-n', 'radar', 'get', 'deployment/radar',
+    '-n', RADAR_NS, 'get', 'deployment/radar',
     '-o', 'jsonpath={.spec.template.spec.serviceAccountName}',
   ).trim();
-  if (!sa) throw new Error('could not read radar\'s ServiceAccount from deployment/radar');
-  applyViaStdin(rbacYaml(sa, 'radar'));
+  if (!sa) throw new Error(`could not read radar's ServiceAccount from deployment/radar in ${RADAR_NS}`);
+  applyViaStdin(rbacYaml(sa, RADAR_NS));
 
   // Start from a clean namespace. A previous attempt in this same worker may
   // have left one Terminating - afterAll deletes without waiting - and
@@ -328,8 +350,8 @@ test.beforeAll(() => {
   // radar discovers CRDs once, at startup, and picks up the new RBAC grant at
   // the same time. Without this restart the kind is invisible to it and every
   // assertion below fails for a reason that has nothing to do with rendering.
-  kubectl('-n', 'radar', 'rollout', 'restart', 'deployment/radar');
-  kubectl('-n', 'radar', 'rollout', 'status', 'deployment/radar', '--timeout=180s');
+  kubectl('-n', RADAR_NS, 'rollout', 'restart', 'deployment/radar');
+  kubectl('-n', RADAR_NS, 'rollout', 'status', 'deployment/radar', '--timeout=180s');
 });
 
 test.afterAll(() => {
@@ -370,23 +392,27 @@ test('a CRD Radar has no curated renderer for is still listed and counted', asyn
 test('selecting the custom kind lists exactly the objects the cluster has', async ({ page }, testInfo) => {
   await openWidgetKind(page);
 
-  const expected = kubectl('get', PLURAL, '-n', NS, '-o', 'name')
+  const expected = kubectl('get', PLURAL, '-A', '-o', 'name')
     .split('\n')
     .filter(Boolean)
     .map((line) => line.split('/').pop() as string)
     .sort();
-  expect(expected.length, `${NS} has no Widgets to check against`).toBe(WIDGETS.length);
+  expect(expected.length, 'the fixture Widgets are missing from the cluster').toBe(WIDGETS.length);
 
-  for (const name of expected) {
-    await searchFor(page, name);
-    const listed = await page.locator('tbody tr').filter({ hasText: name }).count();
-    expect
-      .soft(
-        listed,
-        `${NS}/${name} is a ${KIND} in this cluster but the Resources table does not list it. A list that silently drops custom resources reads as "the operator created nothing". On screen: ${await tableSnapshot(page)}`,
-      )
-      .toBeGreaterThan(0);
-  }
+  // The whole rendered set, compared as a set - not "each expected name is
+  // present somewhere". Presence alone would let a duplicated or stale row
+  // through, and over-reporting resources is as wrong as dropping them. The
+  // fixture is the only source of Widgets in this cluster, so an exact
+  // comparison is well defined, and three rows need no pagination.
+  const listed = (await rowsByColumn(page))
+    .map((row) => cell(row, 'name') ?? '')
+    .filter(Boolean)
+    .sort();
+
+  expect(
+    listed,
+    `the ${KIND} table does not match the cluster. kubectl: [${expected.join(', ')}] on screen: [${listed.join(', ')}]`,
+  ).toEqual(expected);
 
   await captureSurface(page, testInfo, 'crd-objects-listed');
 });
@@ -424,35 +450,33 @@ test("a custom kind renders its own printer columns, with the API server's value
       .toBe(true);
   }
 
-  // 2. Each row carries THAT object's values, read from the cluster now.
-  //    Distinct tiers, replica counts and phases mean a row that borrowed
-  //    another object's value cannot pass.
+  // 2. Each row carries THAT object's values, read from the cluster now, and
+  //    each value is checked in the cell under its own column. Matching
+  //    anywhere in the row would let a replica count of 7 be satisfied by an
+  //    age of "7m", so a column that dropped its value could still pass.
+  const rows = await rowsByColumn(page);
+
   for (const widget of WIDGETS) {
     const truth = widgetFromCluster(widget.name);
-    await searchFor(page, widget.name);
-    const row = page.locator('tbody tr').filter({ hasText: widget.name }).first();
-
-    await expect(
-      row,
-      `no row for ${widget.name}. On screen: ${await tableSnapshot(page)}`,
-    ).toBeVisible({ timeout: 30_000 });
-    const text = ((await row.innerText()) ?? '').replace(/\s+/g, ' ');
+    const row = rows.find((r) => (cell(r, 'name') ?? '').includes(widget.name));
 
     expect
-      .soft(text, `the ${widget.name} row does not show its tier "${truth.tier}" - row reads: ${text}`)
-      .toContain(truth.tier);
-    expect
-      .soft(
-        text,
-        `the ${widget.name} row does not show its replica count "${truth.replicas}" - row reads: ${text}`,
-      )
-      .toContain(truth.replicas);
-    expect
-      .soft(
-        text,
-        `the ${widget.name} row does not show its status phase "${truth.phase}". A custom resource whose status is missing from the list is the shape of every "shows the wrong state" bug filed against the CNPG, Velero and Kyverno surfaces - row reads: ${text}`,
-      )
-      .toContain(truth.phase);
+      .soft(row, `no row for ${widget.name}. On screen: ${await tableSnapshot(page)}`)
+      .toBeTruthy();
+    if (!row) continue;
+
+    for (const [column, want] of [
+      ['tier', truth.tier],
+      ['replicas', truth.replicas],
+      ['phase', truth.phase],
+    ] as const) {
+      expect
+        .soft(
+          cell(row, column),
+          `the ${widget.name} row shows the wrong ${column}. The cluster says ${want}. A custom resource whose values are wrong in the list is the shape of every "shows the wrong state" bug filed against the CNPG, Velero and Kyverno surfaces. Row: ${JSON.stringify(row)}`,
+        )
+        .toBe(want);
+    }
   }
 
   await captureSurface(page, testInfo, 'crd-printer-columns');
