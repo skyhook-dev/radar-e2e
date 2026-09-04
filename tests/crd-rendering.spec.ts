@@ -44,6 +44,7 @@ const GROUP = 'e2e.skyhook.io';
 const PLURAL = 'widgets';
 const KIND = 'Widget';
 const CRD_NAME = `${PLURAL}.${GROUP}`;
+const RBAC_NAME = 'e2e-crd-rendering-reader';
 
 /**
  * The objects this spec creates, and the values it will look for on screen.
@@ -125,6 +126,46 @@ status:
 }
 
 /**
+ * Read-only access to the fixture group for radar's own ServiceAccount.
+ *
+ * radar's chart grants CRD reads PER API GROUP - `rbac.crdGroups.*`, with
+ * `all` defaulting to false and `additionalCrdGroups` provided for anything
+ * not on the built-in list. K8s RBAC has no apiGroup wildcard, so a group
+ * nobody has granted is simply invisible to radar: it lists nothing, and the
+ * kind never reaches the UI.
+ *
+ * The first run of this spec failed exactly there, which is worth keeping in
+ * the comment: without this grant the spec is not testing rendering, it is
+ * testing whether an ungranted group appears, and the answer is always no.
+ * Granting it is also the real operator path for a custom CRD.
+ */
+function rbacYaml(serviceAccount: string, namespace: string): string {
+  return `
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${RBAC_NAME}
+rules:
+  - apiGroups: ["${GROUP}"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${RBAC_NAME}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${RBAC_NAME}
+subjects:
+  - kind: ServiceAccount
+    name: ${serviceAccount}
+    namespace: ${namespace}
+`;
+}
+
+/**
  * kubectl apply with the manifest on stdin, so no file is written to disk.
  *
  * helpers.kubectl() passes args only and has no stdin channel, so this calls
@@ -200,14 +241,28 @@ test.beforeAll(() => {
   applyViaStdin(CRD_YAML);
   kubectl('wait', '--for=condition=Established', `crd/${CRD_NAME}`, '--timeout=60s');
 
-  const existing = kubectl('get', 'namespace', NS, '--ignore-not-found', '-o', 'jsonpath={.metadata.name}');
-  if (existing !== NS) kubectl('create', 'namespace', NS);
+  // Grant radar read access to the fixture group. Read the ServiceAccount and
+  // namespace off the running deployment rather than hardcoding them - the
+  // chart templates both names.
+  const sa = kubectl(
+    '-n', 'radar', 'get', 'deployment/radar',
+    '-o', 'jsonpath={.spec.template.spec.serviceAccountName}',
+  ).trim();
+  if (!sa) throw new Error('could not read radar\'s ServiceAccount from deployment/radar');
+  applyViaStdin(rbacYaml(sa, 'radar'));
+
+  // Start from a clean namespace. A previous attempt in this same worker may
+  // have left one Terminating - afterAll deletes without waiting - and
+  // creating objects in a Terminating namespace fails with a NotFound that
+  // reads like the fixture was never written.
+  kubectl('delete', 'namespace', NS, '--ignore-not-found', '--wait=true', '--timeout=120s');
+  kubectl('create', 'namespace', NS);
 
   for (const w of WIDGETS) applyViaStdin(widgetYaml(w));
 
-  // radar discovers CRDs once, at startup. Without this restart the kind is
-  // invisible to it and every assertion below fails for a reason that has
-  // nothing to do with the rendering being tested.
+  // radar discovers CRDs once, at startup, and picks up the new RBAC grant at
+  // the same time. Without this restart the kind is invisible to it and every
+  // assertion below fails for a reason that has nothing to do with rendering.
   kubectl('-n', 'radar', 'rollout', 'restart', 'deployment/radar');
   kubectl('-n', 'radar', 'rollout', 'status', 'deployment/radar', '--timeout=180s');
 });
@@ -218,6 +273,8 @@ test.afterAll(() => {
   try {
     kubectl('delete', 'namespace', NS, '--ignore-not-found', '--wait=false');
     kubectl('delete', 'crd', CRD_NAME, '--ignore-not-found', '--wait=false');
+    kubectl('delete', 'clusterrolebinding', RBAC_NAME, '--ignore-not-found', '--wait=false');
+    kubectl('delete', 'clusterrole', RBAC_NAME, '--ignore-not-found', '--wait=false');
   } catch {
     // Teardown must not turn a green run red.
   }
