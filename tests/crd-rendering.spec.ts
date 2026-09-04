@@ -190,10 +190,25 @@ subjects:
  * execFileSync directly rather than widening the shared helper for one caller.
  */
 function applyViaStdin(yaml: string): string {
-  return execFileSync('kubectl', ['apply', '-f', '-'], {
+  // Pin the context, for the reason helpers.ts spells out: this helper CREATES
+  // things, and without --context kubectl uses whatever happens to be current.
+  // That has already happened once in this suite - a parallel piece of work
+  // switched the current context mid-run and the fixtures landed in someone
+  // else's cluster while every browser assertion kept passing against the right
+  // hub. Required rather than optional, because a CRD and a ClusterRoleBinding
+  // are cluster-scoped: leaking them into an unrelated cluster is worse than a
+  // stray namespace.
+  const context = process.env.KUBE_CONTEXT ?? '';
+  if (!context) {
+    throw new Error(
+      'KUBE_CONTEXT is not set. This spec creates a CRD and a ClusterRoleBinding - refusing to use ' +
+        'whatever kubectl context happens to be current. Run through run.sh, or set KUBE_CONTEXT.',
+    );
+  }
+  return execFileSync('kubectl', ['--context', context, 'apply', '-f', '-'], {
     input: yaml,
     encoding: 'utf8',
-    env: process.env,
+    timeout: 60_000,
   }).trim();
 }
 
@@ -325,6 +340,13 @@ function cell(row: Record<string, string>, column: string): string | undefined {
 }
 
 test.beforeAll(() => {
+  // Setup gets its own budget. The file's 150s is deliberately tight so a
+  // FAILING TEST reports fast, but this hook can legitimately wait 120s for a
+  // leftover namespace to finish terminating and another 180s for the radar
+  // rollout. Left on the file budget those waits cannot both complete, and a
+  // slow restart would surface as a bare hook timeout with no kubectl reason.
+  test.setTimeout(420_000);
+
   applyViaStdin(CRD_YAML);
   kubectl('wait', '--for=condition=Established', `crd/${CRD_NAME}`, '--timeout=60s');
 
