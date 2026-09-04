@@ -293,6 +293,16 @@ jobs:
             workers: 3
           - scenario: gitops
             specs: tests/gitops.spec.ts
+          # Its own cluster for the same reason gitops has one: it installs a
+          # CRD, and radar only discovers CRDs at startup, so the spec restarts
+          # radar. Any spec sharing this cluster would lose its session mid-run.
+          #
+          # This is the home for custom-resource coverage generally - CNPG,
+          # Velero and Kyverno fixtures belong here as they become assertable
+          # on both variants, rather than in a scenario of their own. The
+          # cluster and the restart are already paid for.
+          - scenario: crds
+            specs: tests/crd-rendering.spec.ts
           - scenario: known-issues
             specs: tests/known-issues.spec.ts
           - scenario: cluster-lifecycle
@@ -515,6 +525,16 @@ jobs:
             workers: 3
           - scenario: gitops
             specs: tests/gitops.spec.ts
+          # Its own cluster for the same reason gitops has one: it installs a
+          # CRD, and radar only discovers CRDs at startup, so the spec restarts
+          # radar. Any spec sharing this cluster would lose its session mid-run.
+          #
+          # This is the home for custom-resource coverage generally - CNPG,
+          # Velero and Kyverno fixtures belong here as they become assertable
+          # on both variants, rather than in a scenario of their own. The
+          # cluster and the restart are already paid for.
+          - scenario: crds
+            specs: tests/crd-rendering.spec.ts
           - scenario: known-issues
             specs: tests/known-issues.spec.ts
           - scenario: cluster-lifecycle
