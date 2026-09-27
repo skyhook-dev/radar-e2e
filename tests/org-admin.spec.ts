@@ -62,30 +62,43 @@ test(
     await page.goto('/settings/organization/members');
     await expect(page.getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
 
-    await page.getByPlaceholder('teammate@company.com').fill(inviteEmail);
+    await page.getByRole('textbox', { name: 'Invite emails', exact: true }).fill(inviteEmail);
     await page.getByRole('combobox', { name: 'Invitation role' }).click();
     await page.getByRole('option').filter({ hasText: inviteRole }).first().click();
 
     const createResponsePromise = page.waitForResponse(
       (res) => res.url().includes(`/api/orgs/${orgId}/invitations`) && res.request().method() === 'POST',
     );
-    await page.getByRole('button', { name: 'Create invite' }).click();
+    await page.getByRole('button', { name: 'Send invite', exact: true }).click();
     const createResponse = await createResponsePromise;
-    expect(createResponse.status(), 'creating an invitation via the UI').toBe(201);
-    const invitation = await createResponse.json();
+    expect(createResponse.status(), 'creating an invitation via the UI').toBe(200);
+    const result = await createResponse.json();
+    expect(result.invited, 'the batch did not invite exactly the submitted email').toEqual([inviteEmail]);
+    expect(result.failed, 'the invitation batch reported failed emails').toEqual([]);
+    expect(result.already_members, 'the new invitee was reported as an existing member').toEqual([]);
+
+    // Batch creation returns email lists, not invite codes. Read the saved
+    // invitation as the owner to exercise its preview and acceptance rules.
+    // This harness uses the no-op mailer; it does not verify email delivery.
+    const invitationsRes = await page.request.get(`/api/orgs/${orgId}/invitations`);
+    expect(invitationsRes.status(), 'listing invitations after creation').toBe(200);
+    const invitations: Array<{ id: string; email: string; role: string }> = await invitationsRes.json();
+    const matchingInvitations = invitations.filter((inv) => inv.email === inviteEmail);
+    expect(matchingInvitations, 'expected one pending invitation for the submitted email').toHaveLength(1);
+    const invitation = matchingInvitations[0];
     const code: string = invitation.id;
-    expect(code, 'create-invitation response has no id').toBeTruthy();
-    expect(invitation.email, 'create-invitation response echoes the wrong email').toBe(inviteEmail);
-    expect(invitation.role, 'create-invitation response echoes the wrong role').toBe('viewer');
-
-    await expect(
-      page.getByText(`Invite created for ${inviteEmail}`),
-      'the members page never confirmed the invite it just created',
-    ).toBeVisible();
-
-    await captureSurface(page, testInfo, 'invite-created-with-link');
-
+    expect(code, 'the saved invitation has no id').toBeTruthy();
     try {
+      expect(invitation.role, 'the saved invitation has the wrong role').toBe('viewer');
+      await expect(
+        page.getByRole('status').filter({ hasText: /^Invited 1\b/ }),
+        'the members page never confirmed the invitation',
+      ).toBeVisible();
+      const pendingRow = page.getByRole('row').filter({ has: page.getByRole('cell', { name: inviteEmail, exact: true }) });
+      await expect(pendingRow, 'the pending invitation never appeared in the members table').toBeVisible();
+      await expect(pendingRow.getByRole('cell', { name: 'viewer', exact: true })).toBeVisible();
+      await captureSurface(page, testInfo, 'invite-created');
+
       // ---- unauthenticated preview: real "no session" context, not the
       // shared admin's storageState (that's the trap this suite was bitten
       // by before - see the task's hard-constraints note). ----
