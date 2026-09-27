@@ -96,7 +96,8 @@ test(
       `minted token "${tokenName}" never appeared in "Your connected agents"`,
     ).toBeVisible();
 
-    await page.getByRole('button', { name: 'Dismiss' }).click();
+    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await expect(nameInput, 'the token reveal stayed open after Dismiss').toBeHidden();
 
     // --- causal link #1: the mint shows up in the audit VIEW ---
     // Before this point, target_id=patId cannot appear in the audit log
@@ -177,17 +178,15 @@ test(
 );
 
 test('the self-hosting page reflects the license this deployment actually runs on', async ({ page }, testInfo) => {
-  // /api/config is the one place the hub's own view of its license lives -
-  // reading it here (rather than hardcoding org/cluster-cap/expiry) means
-  // this test keeps passing if the license this stack runs on ever changes,
-  // and fails honestly if the page stops reflecting whatever /api/config
-  // says.
+  // Public config reports the deployment mode. License details require a
+  // signed-in session and come from the same endpoint the page reads.
   const configRes = await page.request.get('/api/config');
   expect(configRes.status(), 'config endpoint').toBe(200);
   const config = await configRes.json();
   expect(config.mode, 'hub is not reporting self_hosted mode').toBe('self_hosted');
-  const license = config.license;
-  expect(license, 'GET /api/config reported no license block for a self-hosted hub').toBeTruthy();
+  const licenseRes = await page.request.get('/api/license');
+  expect(licenseRes.status(), 'license endpoint').toBe(200);
+  const license = await licenseRes.json();
 
   await page.goto('/settings/organization/self-hosting');
   await expect(page.getByRole('heading', { name: 'Self-hosting' })).toBeVisible();
@@ -205,27 +204,27 @@ test('the self-hosting page reflects the license this deployment actually runs o
   // Guarding each comparison behind `if (license.x)` would turn "the hub
   // stopped reporting the org / cluster cap / expiry" - a real regression -
   // into a test that quietly asserts nothing and still passes.
-  expect(license.org, '/api/config reports no license org').toBeTruthy();
-  expect(license.status, '/api/config reports no license status').toBeTruthy();
+  expect(license.org, '/api/license reports no license org').toBeTruthy();
+  expect(license.status, '/api/license reports no license status').toBeTruthy();
   expect(
     typeof license.max_clusters === 'number' && license.max_clusters > 0,
-    `/api/config reports no cluster cap (max_clusters=${license.max_clusters})`,
+    `/api/license reports no cluster cap (max_clusters=${license.max_clusters})`,
   ).toBe(true);
-  expect(license.expires_at, '/api/config reports no license expiry').toBeTruthy();
+  expect(license.expires_at, '/api/license reports no license expiry').toBeTruthy();
 
   // Soft from here: org, cluster cap, status and expiry are four independent
   // facts the card renders from the same payload. A hard assertion on the
-  // first stops the test, so a card that has drifted from /api/config in
+  // first stops the test, so a card that has drifted from /api/license in
   // several places reports as one problem and takes several runs to unpick.
   // The card being visible above stays hard - none of this means anything if
   // it never rendered.
   await expect
-    .soft(licenseCard, `license is issued to "${license.org}" per /api/config but the card doesn't show it`)
+    .soft(licenseCard, `license is issued to "${license.org}" per /api/license but the card doesn't show it`)
     .toContainText(license.org);
   await expect
     .soft(
       licenseCard,
-      `license caps this deployment at ${license.max_clusters} clusters per /api/config but the card doesn't say so`,
+      `license caps this deployment at ${license.max_clusters} clusters per /api/license but the card doesn't say so`,
     )
     .toContainText(`up to ${license.max_clusters} clusters`);
   if (license.status === 'trial') {
@@ -248,7 +247,7 @@ test('the self-hosting page reflects the license this deployment actually runs o
     await expect
       .soft(
         licenseCard,
-        `license expires ${license.expires_at} per /api/config but the card doesn't show "${formatted}"`,
+        `license expires ${license.expires_at} per /api/license but the card doesn't show "${formatted}"`,
       )
       .toContainText(formatted);
   }

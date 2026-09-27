@@ -57,13 +57,6 @@ const RBAC_NAME = 'e2e-crd-rendering-reader';
 // restart the wrong deployment.
 const RADAR_NS = process.env.RADAR_NS ?? 'radar';
 
-// The published half of the matrix installs the released hub, whose bundled UI
-// is the @skyhook-io/radar-app npm package - not the radar image. Hub 1.5.0
-// pins radar-app ^1.11.0, and rendering a CRD through its own
-// additionalPrinterColumns first shipped in radar-app 1.12.0. So the released
-// UI genuinely cannot do this yet, and falls back to name/namespace/status/age.
-const PUBLISHED = process.env.VARIANT === 'published';
-
 /**
  * The objects this spec creates, and the values it will look for on screen.
  * Distinct on every field so a column rendering the WRONG object's value, or
@@ -391,7 +384,11 @@ test.afterAll(() => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  await assertClusterConnected(page);
+  // Pod readiness after the setup restart does not mean the Hub tunnel has
+  // reconnected yet. Wait for the connection before checking rendered data.
+  await expect(async () => {
+    await assertClusterConnected(page);
+  }).toPass({ timeout: 60_000, intervals: [1_000, 2_000, 5_000] });
 });
 
 test('a CRD Radar has no curated renderer for is still listed and counted', async ({ page }, testInfo) => {
@@ -440,18 +437,6 @@ test('selecting the custom kind lists exactly the objects the cluster has', asyn
 });
 
 test("a custom kind renders its own printer columns, with the API server's values", async ({ page }, testInfo) => {
-  // Expected to fail on the published variant, and marked rather than skipped
-  // on purpose. The released hub bundles radar-app 1.11.x, which predates
-  // rendering a CRD through its own additionalPrinterColumns, so it shows the
-  // generic name/namespace/status/age fallback. That is version skew, not a
-  // defect - but a skip would rot silently, whereas this turns the run RED the
-  // moment a hub release carries a radar-app that can do it, which is the
-  // signal to delete this line. Same contract as KNOWN-ISSUES.md.
-  test.fail(
-    PUBLISHED,
-    'the published hub bundles radar-app ^1.11.0; CRD printer columns first shipped in radar-app 1.12.0',
-  );
-
   await openWidgetKind(page);
 
   // 1. The columns the CRD declares are the columns on screen. Radar has no
