@@ -66,7 +66,7 @@ evidence that anything in it is true.
 | `platform` | the header search finds what the cluster really has and invents nothing; the notification inbox records issues arriving AND clearing, and can be cleared |
 | `diagnostics` | diagnosis, log streaming and an interactive pod terminal, all proxied end to end |
 | `multi-cluster` | a second cluster connects and the fleet aggregates across both, including honest reporting when one is offline |
-| `cluster-lifecycle` | an agent that stops is reported disconnected rather than stale-connected, comes back on its own, and a rotated token drops the live tunnel |
+| `cluster-lifecycle` | an agent that stops is reported disconnected and reconnects when restored; routine token rotation preserves access until cutover, while immediate revocation disconnects the agent and rejects the old token |
 | `admin` | onboarding, org administration and settings, including an install wizard that names this hub's real agent URL |
 | `gitops` | CRD-backed GitOps inventory, on its own cluster because it installs CRDs |
 | `known-issues` | pins defects found here so they turn red when fixed, not silently absorbed |

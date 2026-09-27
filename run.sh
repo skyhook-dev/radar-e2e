@@ -392,10 +392,11 @@ connect_cluster() {
     radar_image_args=()
   fi
 
+  # Bash 3.2 needs the guarded expansion for an empty array under set -u.
   helm_retry upgrade --install radar "$radar_chart" \
     --kube-context "$KUBE_CONTEXT" \
     --namespace "$RADAR_NS" --create-namespace \
-    "${radar_image_args[@]}" \
+    ${radar_image_args[@]+"${radar_image_args[@]}"} \
     --set cloud.enabled=true \
     --set "cloud.url=wss://radar-hub-web.${NS}.svc.cluster.local/agent" \
     --set "cloud.clusterName=${CLUSTER_DISPLAY_NAME}" \

@@ -8,9 +8,8 @@ import { authStatePath, clusterId, kubectl, captureSurface } from './helpers';
 // Every other scenario runs against a healthy, connected cluster, so the only
 // connection state any of them ever observes is "connected". That leaves the
 // states an operator actually calls support about untested: an agent that went
-// away, an agent that came back, and a token that was rotated because it
-// leaked. A hub that reported "connected" forever - or that kept serving proxy
-// traffic on a rotated token - would pass the entire rest of this suite.
+// away, an agent that came back, routine rotation without downtime, and
+// immediate revocation of a leaked token.
 //
 // The disconnect is caused by scaling radar to zero rather than by deleting
 // anything, so the cluster record, its token and its history stay exactly as
@@ -38,6 +37,21 @@ function helmCli(...args: string[]): string {
     encoding: 'utf8',
     timeout: 10 * 60_000,
   }).trim();
+}
+
+function currentRadarToken(): string {
+  const token = helmCli('get', 'values', 'radar', '--namespace', RADAR_NS, '-o', 'json')
+    .replace(/\s/g, '')
+    .match(/"token":"([^"]+)"/)?.[1] ?? '';
+  expect(token, 'could not read the token radar is currently using').toBeTruthy();
+  return token;
+}
+
+async function agentTokenStatus(page: Page, token: string): Promise<number> {
+  const res = await page.request.get('/api/agent/status', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.status();
 }
 
 /** Reconfigure the running radar release with a different cluster token. */
@@ -157,20 +171,63 @@ test('a cluster reconnects on its own once its agent comes back', async ({ page 
   await captureSurface(page, testInfo, 'clusters-list-reconnected');
 });
 
-test('rotating a cluster token drops the live tunnel and the old token no longer works', async ({
+test('routine token rotation keeps the cluster usable until the agent switches to the new token', async ({ page }, testInfo) => {
+  await waitForStatus(page, 'connected', 'cluster was not connected before rotating its token');
+  originalToken = currentRadarToken();
+
+  const res = await page.request.post(`/api/clusters/${clusterId}/rotate-token`, {
+    headers: { 'X-Hub-Auth': '1' },
+  });
+  expect(res.status(), 'routine token rotation was rejected').toBe(200);
+  rotatedToken = (await res.json()).token;
+  expect(rotatedToken, 'rotate-token returned no token').toMatch(/^rhc_/);
+  expect(rotatedToken === originalToken, 'rotation reused the old token').toBe(false);
+
+  expect(await clusterStatus(page), 'routine rotation disconnected the live agent').toBe('connected');
+  expect(await agentTokenStatus(page, originalToken), 'the old token was rejected during grace').toBe(200);
+  expect(
+    (await page.request.get(`/c/${clusterId}/api/capacity`)).status(),
+    'cluster requests stopped working during rotation grace',
+  ).toBe(200);
+
+  // A fresh handshake must accept the old token during grace, not just leave
+  // an already authenticated tunnel open.
+  kubectl('-n', RADAR_NS, 'rollout', 'restart', 'deploy/radar');
+  kubectl('-n', RADAR_NS, 'rollout', 'status', 'deploy/radar', '--timeout=120s');
+  await waitForStatus(page, 'connected', 'the old token could not reconnect during grace');
+  await expect.poll(
+    async () => (await page.request.get(`/c/${clusterId}/api/capacity`)).status(),
+    { message: 'cluster requests failed after reconnecting with the old token', timeout: 60_000 },
+  ).toBe(200);
+
+  setRadarToken(rotatedToken);
+  await waitForStatus(page, 'connected', 'the new token did not reconnect the agent');
+  await expect.poll(() => agentTokenStatus(page, originalToken), {
+    message: 'the old token still authenticates after the new token connected',
+    timeout: 60_000,
+    intervals: [2_000],
+  }).toBe(401);
+  expect(await agentTokenStatus(page, rotatedToken), 'the new token was rejected after cutover').toBe(200);
+  await expect.poll(
+    async () => (await page.request.get(`/c/${clusterId}/api/capacity`)).status(),
+    { message: 'cluster requests failed after switching to the new token', timeout: 60_000 },
+  ).toBe(200);
+  await page.goto('/clusters');
+  await captureSurface(page, testInfo, 'clusters-list-token-cutover');
+});
+
+test('immediate token revocation drops the live tunnel and rejects the old token', async ({
   page,
 }, testInfo) => {
   await waitForStatus(page, 'connected', 'cluster was not connected before rotating its token');
 
   // Whatever radar is currently configured with is, by definition, the token
   // about to be rotated away.
-  originalToken = helmCli('get', 'values', 'radar', '--namespace', RADAR_NS, '-o', 'json')
-    .replace(/\s/g, '')
-    .match(/"token":"([^"]+)"/)?.[1] ?? '';
-  expect(originalToken, 'could not read the token radar is currently using').toBeTruthy();
+  originalToken = currentRadarToken();
 
   const res = await page.request.post(`/api/clusters/${clusterId}/rotate-token`, {
     headers: { 'X-Hub-Auth': '1' },
+    data: { revoke_now: true },
   });
   expect(
     res.status(),
@@ -180,23 +237,19 @@ test('rotating a cluster token drops the live tunnel and the old token no longer
   expect(rotatedToken, 'rotate-token returned no token').toMatch(/^rhc_/);
   expect(rotatedToken, 'rotate-token returned the same token it was given').not.toBe(originalToken);
 
-  // The hub kicks the live session on rotation, on purpose: a leaked token must
-  // not keep serving proxy traffic until the agent happens to reconnect.
+  // Immediate revocation must close the live session, not wait for the agent
+  // to reconnect with the revoked token.
   await waitForStatus(
     page,
     'disconnected',
-    'the tunnel survived a token rotation - a leaked token would keep serving traffic until the agent next reconnected',
+    'the tunnel survived immediate token revocation',
   );
 
-  // radar is still configured with the OLD token and is retrying continuously.
-  // If the old token were still accepted, this is where it would come back.
-  await expect
-    .poll(() => clusterStatus(page), {
-      message: 'checking the old token stays rejected',
-      timeout: 45_000,
-      intervals: [3_000],
-    })
-    .toBe('disconnected');
+  expect(await agentTokenStatus(page, originalToken), 'the revoked token still authenticates').toBe(401);
+  expect(
+    (await page.request.get(`/c/${clusterId}/api/capacity`)).ok(),
+    'cluster requests still succeed after immediate revocation',
+  ).toBe(false);
   expect(
     await clusterStatus(page),
     'the cluster reconnected while its agent was still using the rotated-away token - rotation did not actually invalidate it',
@@ -217,4 +270,9 @@ test('rotating a cluster token drops the live tunnel and the old token no longer
     'connected',
     'the cluster did not reconnect after radar was reconfigured with the rotated token - rotation is a one-way break',
   );
+  expect(await agentTokenStatus(page, originalToken), 'the revoked token became valid again').toBe(401);
+  await expect.poll(
+    async () => (await page.request.get(`/c/${clusterId}/api/capacity`)).status(),
+    { message: 'cluster requests failed after recovering from immediate revocation', timeout: 60_000 },
+  ).toBe(200);
 });
