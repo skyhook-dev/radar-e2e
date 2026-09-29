@@ -189,7 +189,11 @@ test('the self-hosting page reflects the license this deployment actually runs o
   const license = await licenseRes.json();
 
   await page.goto('/settings/organization/self-hosting');
-  await expect(page.getByRole('heading', { name: 'Self-hosting' })).toBeVisible();
+  // Renamed "Radar Cloud Self-Managed" on web main (radar-hub-web#337). The
+  // released hub still says "Self-hosting", and both variants run this test.
+  await expect(
+    page.getByRole('heading', { name: /^(Self-hosting|Radar Cloud Self-Managed)$/ }),
+  ).toBeVisible();
 
   // The License card is the sibling <div> right after the "License" <h2> -
   // scope every assertion to it so a coincidental match elsewhere on the
