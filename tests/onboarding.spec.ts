@@ -8,17 +8,20 @@ import { authStatePath, captureSurface } from './helpers';
 //
 //  1. The in-app "Connect a cluster" wizard (/install): mints a real cluster
 //     token via POST /api/clusters and hands the operator a Helm command that
-//     bakes in this hub's real agent URL + the token. This is the
-//     "cloud-first wizard" path (radar-hub/docs/OSS-TO-CLOUD-UX.md §5).
+//     bakes in the address the cluster dials + the token. This hub's public
+//     URL is localhost, which no agent can dial, so the wizard asks where the
+//     cluster runs; the e2e cluster is the hub's own, so the address is the
+//     hub's in-cluster one. This is the "cloud-first wizard" path
+//     (radar-hub/docs/OSS-TO-CLOUD-UX.md §5).
 //
 //  2. The Cloud Connect device flow (`radar cloud install --hub-url ...`,
 //     radar-hub/docs/OSS-TO-CLOUD-UX.md §3): the CLI POSTs
-//     /api/connect/requests, opens /connect/{id} in a browser for a human to
-//     approve, then polls with its device_secret until the hub hands back the
-//     minted token. This spec drives the create + poll legs exactly as
-//     internal/cloud/connect.go does (verified against that file) and drives
-//     the /connect/{id} approval itself through the real browser page - the
-//     only thing simulated is the CLI process; a human still clicked Approve.
+//     /api/connect/requests, a human approves /connect/{id}, and the CLI polls
+//     for the token. This stack's hub has only a localhost public URL, so it
+//     has no address to hand the CLI's agent and refuses the request up
+//     front; the spec checks that refusal and the unknown-id paths. The
+//     approval leg needs a hub with an address agents can reach, which this
+//     stack does not run.
 //
 // Deliberately NOT covered: actually installing a second radar agent
 // (tests/multi-cluster.spec.ts already proves a second agent can connect, and
@@ -28,11 +31,10 @@ import { authStatePath, captureSurface } from './helpers';
 // helm against this Kubernetes cluster.
 
 const hubUrl = process.env.HUB_URL ?? 'http://localhost:18080';
-// Same derivation radar-hub's agentWSURL() applies to RADAR_HUB_PUBLIC_URL,
-// and the same one the wizard's getAgentWsUrl() applies client-side to
-// whatever origin the browser is on - independently reproduced here so the
-// test has its own ground truth rather than trusting either code path.
-const expectedAgentWSSURL = `${hubUrl.replace(/^http/, 'ws')}/agent`;
+// The hub's in-cluster address, the one run.sh installs radar with: the web
+// Service's self-signed https port by in-cluster DNS name.
+const HUB_NS = process.env.NS ?? 'radar-hub';
+const expectedInClusterAgentURL = `wss://radar-hub-web.${HUB_NS}.svc.cluster.local/agent`;
 
 // Cloud Connect request ids are randURLSafe(16) - 22 base64url chars
 // (auth/connectResume.ts's CONNECT_REQUEST_ID_PATTERN on the frontend,
@@ -46,14 +48,6 @@ const UNKNOWN_CONNECT_ID = '0'.repeat(22);
 // counts against this hub's trial cap (3 clusters, one already connected) and
 // would eventually break every other scenario on the shared stack.
 const trackedClusterIds: string[] = [];
-
-// Set by the approval test, read by the "already handled" negative test that
-// re-approves the same request. Connect *requests* have no delete endpoint at
-// all (create/poll/preview/approve is the entire surface - see
-// connect_handlers.go) - an unapproved one simply self-expires on its 15
-// minute TTL without ever creating a cluster or counting against the license
-// cap, so there is nothing to clean up for those.
-let approvedConnectRequestId = '';
 
 test.afterAll(async () => {
   if (trackedClusterIds.length === 0) return;
@@ -72,6 +66,15 @@ test.afterAll(async () => {
 // Helm tab explicitly (rather than trusting whatever tab is active by
 // default) keeps this robust to another agent on the shared stack having left
 // a different tab preference in localStorage.
+// The value after `flag` in a shell command, with the single quotes the
+// wizard puts around each value removed.
+function flagValue(command: string, flag: string): string | undefined {
+  const at = command.indexOf(flag);
+  if (at < 0) return undefined;
+  const raw = command.slice(at + flag.length).match(/^'([^']*)'|^(\S+)/);
+  return raw ? (raw[1] ?? raw[2]) : undefined;
+}
+
 async function readHelmCommand(page: Page): Promise<string> {
   await page.getByRole('tab', { name: 'Helm CLI' }).click();
   const pre = page.getByRole('tabpanel').locator('pre');
@@ -79,7 +82,7 @@ async function readHelmCommand(page: Page): Promise<string> {
   return (await pre.textContent()) ?? '';
 }
 
-test('the install wizard names this hub\'s real agent URL and mints a token the hub itself recognizes', async ({
+test('the install wizard names the hub\'s in-cluster address for a cluster next to it and mints a token the hub itself recognizes', async ({
   page,
 }, testInfo) => {
   await page.goto('/install');
@@ -87,6 +90,7 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
 
   const clusterName = `e2e-onboarding-wizard-${Date.now()}`;
   await page.getByLabel('Cluster name').fill(clusterName);
+  await page.getByRole('radio', { name: 'In the same cluster as the hub' }).click();
   await page.getByRole('button', { name: 'Generate install command' }).click();
 
   await expect(page.getByRole('heading', { name: 'Install in your cluster' })).toBeVisible();
@@ -99,20 +103,23 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
   trackedClusterIds.push(clusterId!);
 
   const command = await readHelmCommand(page);
-  const cloudUrl = command.match(/--set cloud\.url=(\S+)/)?.[1];
-  const clusterNameFlag = command.match(/--set cloud\.clusterName=(\S+)/)?.[1];
-  const token = command.match(/--from-literal=token=(\S+)/)?.[1];
+  const cloudUrl = flagValue(command, '--set cloud.url=');
+  const clusterNameFlag = flagValue(command, '--set cloud.clusterName=');
+  const token = flagValue(command, '--from-literal=token=');
 
   expect(cloudUrl, 'command has no --set cloud.url= flag at all').toBeTruthy();
   expect(clusterNameFlag, 'command has no --set cloud.clusterName= flag at all').toBeTruthy();
   expect(token, 'command has no --from-literal=token= at all').toBeTruthy();
 
-  // "Names this hub's real public URL" - not a placeholder, not some other
-  // hub. Checked two ways: against our own independent derivation from
-  // HUB_URL, and (in the next test) against what the create-connect-request
-  // endpoint itself reports for this same deployment.
-  expect(cloudUrl, `command points at "${cloudUrl}", not this hub's agent URL ${expectedAgentWSSURL}`).toBe(
-    expectedAgentWSSURL,
+  // The in-cluster address, not the localhost public URL (which the agent
+  // pod would resolve to itself), not a placeholder, not some other hub.
+  expect(cloudUrl, `command points at "${cloudUrl}", not this hub's in-cluster address ${expectedInClusterAgentURL}`).toBe(
+    expectedInClusterAgentURL,
+  );
+  // That listener's certificate is self-signed, so the agent must skip
+  // verification or it never connects.
+  expect(command, 'command lacks --set cloud.insecureSkipVerify=true for the self-signed in-cluster listener').toContain(
+    '--set cloud.insecureSkipVerify=true',
   );
   expect(clusterNameFlag, 'cloud.clusterName does not match the cluster id the wizard just created').toBe(
     clusterId,
@@ -140,19 +147,17 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
   await captureSurface(page, testInfo, 'install-wizard-helm-cmd');
 });
 
-test('the /connect/:id page drives a real Cloud Connect request through approval, exactly what the CLI needs', async ({
+test('a hub whose only address is localhost refuses Cloud Connect and says where to connect instead', async ({
   page,
-}, testInfo) => {
-  // Same request shape internal/cloud/connect.go's ConnectMetadata sends -
-  // deployment_mode is the only field the hub requires, the rest is
-  // display-only consent-card metadata, but sending real-shaped values keeps
-  // this test honest about what a real `radar cloud install` invocation looks
-  // like rather than an API-shaped stub.
-  const clusterName = `e2e-onboarding-connect-${Date.now()}`;
+}) => {
+  // Same request shape internal/cloud/connect.go's ConnectMetadata sends.
+  // The refusal comes before any request is minted: an agent in the cluster
+  // would resolve the hub's localhost URL to its own pod, and the hub has no
+  // other address it could put in the CLI's install.
   const createRes = await page.request.post('/api/connect/requests', {
     data: {
       deployment_mode: 'in-cluster',
-      cluster_name: clusterName,
+      cluster_name: `e2e-onboarding-connect-${Date.now()}`,
       radar_version: '9.9.9-e2e',
       k8s_version: '1.31.0',
       k8s_distro: 'kind',
@@ -160,91 +165,18 @@ test('the /connect/:id page drives a real Cloud Connect request through approval
       scope: 'cluster-wide',
     },
   });
-  expect(createRes.status(), 'POST /api/connect/requests (public, no hub identity yet - what the CLI calls first)').toBe(
-    201,
-  );
-  const created = await createRes.json();
-  for (const field of ['request_id', 'device_secret', 'connect_url', 'wss_url', 'expires_in', 'poll_interval']) {
-    expect(created[field], `create-connect-request response is missing "${field}" - the CLI cannot proceed without it`).toBeTruthy();
-  }
-  approvedConnectRequestId = created.request_id;
+  expect(createRes.status(), 'POST /api/connect/requests on a hub with only a localhost address').toBe(409);
+  // The CLI prints this body, so it has to point somewhere that works.
+  expect(await createRes.text()).toContain("Connect clusters from the hub's Connect page");
 
-  // The URL the CLI would print and open in a browser must actually point at
-  // this hub's own /connect/{id} page - not a doc example, not another stack.
-  expect(created.connect_url).toBe(`${hubUrl}/connect/${created.request_id}`);
-  // Same agent URL the install wizard bakes in - this is the URL Radar dials
-  // once it has the token, and it must agree across both onboarding paths.
-  expect(created.wss_url).toBe(expectedAgentWSSURL);
-
-  // The CLI's own poll leg (internal/cloud/connect.go's Poll, Authorization:
-  // Bearer <device_secret>) before anyone has approved anything - proves the
-  // poll channel is live and reports "pending" honestly, the same call
-  // PollUntilApproved makes in a loop.
-  const prePoll = await page.request.get(`/api/connect/requests/${created.request_id}`, {
-    headers: { Authorization: `Bearer ${created.device_secret}` },
-  });
-  expect(prePoll.status(), 'device-secret poll of a freshly created, unapproved request').toBe(200);
-  expect((await prePoll.json()).status).toBe('pending');
-
-  // Now the human leg: open the same URL the CLI printed, signed in as the
-  // admin, and approve it - the actual browser page, not a simulated POST.
-  await page.goto(`/connect/${created.request_id}`);
-  await expect(page.getByRole('heading', { name: /Connect this cluster to/ })).toBeVisible();
-  // The consent card is the anti-phishing surface (OSS-TO-CLOUD-UX.md §3) -
-  // it must name the cluster metadata this specific request carries, not a
-  // generic "approve?" prompt.
-  await expect(page.getByText(clusterName, { exact: false })).toBeVisible();
-  await expect(page.getByText('Kubernetes 1.31.0', { exact: false })).toBeVisible();
-
-  await captureSurface(page, testInfo, 'connect-approval-page');
-
-  const approveResponsePromise = page.waitForResponse(
-    (res) => res.url().includes(`/api/connect/requests/${created.request_id}/approve`) && res.request().method() === 'POST',
-  );
-  await page.getByRole('button', { name: 'Connect cluster' }).click();
-  const approveResponse = await approveResponsePromise;
-  expect(approveResponse.status(), 'approving the connect request as the signed-in admin').toBe(200);
-  const approvedClusterId = (await approveResponse.json()).cluster_id as string;
-  expect(approvedClusterId, 'approve response carries no cluster_id').toBeTruthy();
-  trackedClusterIds.push(approvedClusterId);
-
-  // The page itself must reflect the approved state, not just the network
-  // call underneath it - WaitingForCluster replaces the consent form the
-  // moment approval succeeds.
-  await expect(
-    page.getByRole('heading', { name: /Connecting your cluster|Approved.*connecting/i }),
-  ).toBeVisible();
-
-  // "Yields what the CLI needs": re-poll the SAME device-secret channel the
-  // CLI is blocked on (PollUntilApproved's loop). Per internal/cloud/connect.go,
-  // an approved response missing cluster_id, token, or wss_url is treated as
-  // "hub approved the connection but returned incomplete details" - a real
-  // error path in the CLI - so this is the actual bar, not a looser one.
-  const postPoll = await page.request.get(`/api/connect/requests/${created.request_id}`, {
-    headers: { Authorization: `Bearer ${created.device_secret}` },
-  });
-  expect(postPoll.status()).toBe(200);
-  const polled = await postPoll.json();
-  expect(polled.status, 'the connect request never reached "approved" on the CLI\'s own poll channel').toBe(
-    'approved',
-  );
-  expect(polled.cluster_id).toBe(approvedClusterId);
-  expect(polled.token, 'approved poll response carries no token - the CLI would report incomplete details and refuse to proceed').toMatch(/^rhc_/);
-  expect(polled.wss_url).toBe(expectedAgentWSSURL);
-
-  // Ground truth from the hub's own cluster list, independent of anything the
-  // connect flow told us about itself.
+  // Nothing was minted: the hub's cluster list has no cluster by that name.
   const clustersRes = await page.request.get('/api/clusters');
   expect(clustersRes.status()).toBe(200);
-  const clusters = (await clustersRes.json()) as Array<{ id: string; status: string }>;
-  const approved = clusters.find((c) => c.id === approvedClusterId);
-  expect(approved, `approved cluster ${approvedClusterId} does not appear in GET /api/clusters at all`).toBeTruthy();
-  expect(['never_connected', 'disconnected']).toContain(approved!.status);
+  const clusters = (await clustersRes.json()) as Array<{ name: string }>;
+  expect(clusters.some((c) => c.name.startsWith('e2e-onboarding-connect-')), 'a refused connect request created a cluster').toBe(false);
 });
 
-test('an unknown or already-approved connect id is rejected, not silently accepted', async ({ page }) => {
-  test.skip(!approvedConnectRequestId, 'depends on the approval test above having run first');
-
+test('an unknown connect id is rejected, not silently accepted', async ({ page }) => {
   // Unknown id: well-formed (passes the frontend's own id-shape check), never
   // minted. Both the public preview and the session-authed approve must 404 -
   // not silently hand back some other request's data.
@@ -263,17 +195,4 @@ test('an unknown or already-approved connect id is rejected, not silently accept
   await expect(
     page.getByRole('heading', { name: /Connect link not found|Invalid connect link/ }),
   ).toBeVisible();
-
-  // Already-approved: re-approve the SAME request the previous test just
-  // consumed. The row is no longer "pending" (db.ErrConnectNotPending), so
-  // this must be a real conflict - never a second cluster minted from the
-  // same request.
-  const reapproveRes = await page.request.post(`/api/connect/requests/${approvedConnectRequestId}/approve`, {
-    headers: { 'X-Hub-Auth': '1' },
-    data: {},
-  });
-  expect(
-    reapproveRes.status(),
-    'approving a connect request a second time must conflict, not mint a second cluster',
-  ).toBe(409);
 });

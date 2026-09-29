@@ -27,16 +27,21 @@ test.setTimeout(300_000);
 
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
+/** "1,591" -> 1591. Counts past 999 carry a thousands separator. */
+function parseCount(text: string): number {
+  return Number(text.replace(/,/g, ''));
+}
+
 /** "Showing 15 resources · 207 events" -> 207. */
 async function shownEvents(page: Page): Promise<number | null> {
-  const m = (await bodyText(page)).match(/Showing\s+\d+\s+resources?\s*·\s*(\d+)\s+events?/);
-  return m ? Number(m[1]) : null;
+  const m = (await bodyText(page)).match(/Showing\s+[\d,]+\s+resources?\s*·\s*([\d,]+)\s+events?/);
+  return m ? parseCount(m[1]) : null;
 }
 
 /** The number a filter advertises on its own badge. */
 async function badgeCount(page: Page, label: string): Promise<number | null> {
-  const m = (await bodyText(page)).match(new RegExp(`${label}\\s*\\n\\s*(\\d+)`));
-  return m ? Number(m[1]) : null;
+  const m = (await bodyText(page)).match(new RegExp(`${label}\\s*\\n\\s*([\\d,]+)`));
+  return m ? parseCount(m[1]) : null;
 }
 
 async function openTimeline(page: Page) {
