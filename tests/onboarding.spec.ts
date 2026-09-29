@@ -8,8 +8,11 @@ import { authStatePath, captureSurface } from './helpers';
 //
 //  1. The in-app "Connect a cluster" wizard (/install): mints a real cluster
 //     token via POST /api/clusters and hands the operator a Helm command that
-//     bakes in this hub's real agent URL + the token. This is the
-//     "cloud-first wizard" path (radar-hub/docs/OSS-TO-CLOUD-UX.md §5).
+//     bakes in the address the cluster dials + the token. This hub's public
+//     URL is localhost, which no agent can dial, so the wizard asks where the
+//     cluster runs; the e2e cluster is the hub's own, so the address is the
+//     hub's in-cluster one. This is the "cloud-first wizard" path
+//     (radar-hub/docs/OSS-TO-CLOUD-UX.md §5).
 //
 //  2. The Cloud Connect device flow (`radar cloud install --hub-url ...`,
 //     radar-hub/docs/OSS-TO-CLOUD-UX.md §3): the CLI POSTs
@@ -33,6 +36,10 @@ const hubUrl = process.env.HUB_URL ?? 'http://localhost:18080';
 // whatever origin the browser is on - independently reproduced here so the
 // test has its own ground truth rather than trusting either code path.
 const expectedAgentWSSURL = `${hubUrl.replace(/^http/, 'ws')}/agent`;
+// The hub's in-cluster address, the one run.sh installs radar with: the web
+// Service's self-signed https port by in-cluster DNS name.
+const HUB_NS = process.env.NS ?? 'radar-hub';
+const expectedInClusterAgentURL = `wss://radar-hub-web.${HUB_NS}.svc.cluster.local/agent`;
 
 // Cloud Connect request ids are randURLSafe(16) - 22 base64url chars
 // (auth/connectResume.ts's CONNECT_REQUEST_ID_PATTERN on the frontend,
@@ -72,6 +79,15 @@ test.afterAll(async () => {
 // Helm tab explicitly (rather than trusting whatever tab is active by
 // default) keeps this robust to another agent on the shared stack having left
 // a different tab preference in localStorage.
+// The value after `flag` in a shell command, with the single quotes the
+// wizard puts around each value removed.
+function flagValue(command: string, flag: string): string | undefined {
+  const at = command.indexOf(flag);
+  if (at < 0) return undefined;
+  const raw = command.slice(at + flag.length).match(/^'([^']*)'|^(\S+)/);
+  return raw ? (raw[1] ?? raw[2]) : undefined;
+}
+
 async function readHelmCommand(page: Page): Promise<string> {
   await page.getByRole('tab', { name: 'Helm CLI' }).click();
   const pre = page.getByRole('tabpanel').locator('pre');
@@ -79,7 +95,7 @@ async function readHelmCommand(page: Page): Promise<string> {
   return (await pre.textContent()) ?? '';
 }
 
-test('the install wizard names this hub\'s real agent URL and mints a token the hub itself recognizes', async ({
+test('the install wizard names the hub\'s in-cluster address for a cluster next to it and mints a token the hub itself recognizes', async ({
   page,
 }, testInfo) => {
   await page.goto('/install');
@@ -87,6 +103,7 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
 
   const clusterName = `e2e-onboarding-wizard-${Date.now()}`;
   await page.getByLabel('Cluster name').fill(clusterName);
+  await page.getByRole('radio', { name: 'In the same cluster as the hub' }).click();
   await page.getByRole('button', { name: 'Generate install command' }).click();
 
   await expect(page.getByRole('heading', { name: 'Install in your cluster' })).toBeVisible();
@@ -99,20 +116,23 @@ test('the install wizard names this hub\'s real agent URL and mints a token the 
   trackedClusterIds.push(clusterId!);
 
   const command = await readHelmCommand(page);
-  const cloudUrl = command.match(/--set cloud\.url=(\S+)/)?.[1];
-  const clusterNameFlag = command.match(/--set cloud\.clusterName=(\S+)/)?.[1];
-  const token = command.match(/--from-literal=token=(\S+)/)?.[1];
+  const cloudUrl = flagValue(command, '--set cloud.url=');
+  const clusterNameFlag = flagValue(command, '--set cloud.clusterName=');
+  const token = flagValue(command, '--from-literal=token=');
 
   expect(cloudUrl, 'command has no --set cloud.url= flag at all').toBeTruthy();
   expect(clusterNameFlag, 'command has no --set cloud.clusterName= flag at all').toBeTruthy();
   expect(token, 'command has no --from-literal=token= at all').toBeTruthy();
 
-  // "Names this hub's real public URL" - not a placeholder, not some other
-  // hub. Checked two ways: against our own independent derivation from
-  // HUB_URL, and (in the next test) against what the create-connect-request
-  // endpoint itself reports for this same deployment.
-  expect(cloudUrl, `command points at "${cloudUrl}", not this hub's agent URL ${expectedAgentWSSURL}`).toBe(
-    expectedAgentWSSURL,
+  // The in-cluster address, not the localhost public URL (which the agent
+  // pod would resolve to itself), not a placeholder, not some other hub.
+  expect(cloudUrl, `command points at "${cloudUrl}", not this hub's in-cluster address ${expectedInClusterAgentURL}`).toBe(
+    expectedInClusterAgentURL,
+  );
+  // That listener's certificate is self-signed, so the agent must skip
+  // verification or it never connects.
+  expect(command, 'command lacks --set cloud.insecureSkipVerify=true for the self-signed in-cluster listener').toContain(
+    '--set cloud.insecureSkipVerify=true',
   );
   expect(clusterNameFlag, 'cloud.clusterName does not match the cluster id the wizard just created').toBe(
     clusterId,
