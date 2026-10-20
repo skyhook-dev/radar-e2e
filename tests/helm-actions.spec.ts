@@ -15,25 +15,6 @@ import { assertClusterConnected, clusterId, helm, kubectl, captureSurface } from
 // Everything lives in a dedicated `e2e-helm-actions` namespace on a
 // throwaway chart this spec installs and owns - never radar or radar-hub.
 //
-// KNOWN ISSUE (see KNOWN-ISSUES.md #3): on this stack, every Helm write
-// attempted through the UI 403s with "Helm write operations require
-// additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart
-// values." That is not a fluke of this harness - it is Radar's intentional,
-// secure-by-default gate (Helm writes need `create/update/patch/delete` on
-// every resource type, so the chart makes it opt-in). The bug is that the
-// capability the UI uses to decide whether to SHOW enabled Upgrade/Rollback/
-// Edit-Values controls (`/api/capabilities`, checked as the impersonated
-// end user) is not the capability actually enforced when those controls are
-// used (`requireHelmWrite`, checked as Radar's own ServiceAccount). An admin
-// with full cluster RBAC sees fully-enabled write controls that always
-// fail. Both tests below are written as if the write succeeded and marked
-// `test.fail()` per the project convention - they turn the run red the
-// moment someone fixes the mismatch (or provisions this stack with
-// `rbac.helm=true`), which is the signal to delete the marker.
-//
-// Re-enabling either test for real: install Radar with
-// `--set rbac.helm=true` (see deploy/helm/radar/templates/clusterrole.yaml).
-
 const NAMESPACE = 'e2e-helm-actions';
 const RELEASE = `helm-actions-probe-${Date.now()}`;
 const V1_MESSAGE = 'hello-v1';
@@ -159,10 +140,6 @@ test.afterAll(() => {
 });
 
 test('upgrading a release from the Values editor changes the cluster and advances the revision', async ({ page }, testInfo) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 3: Helm write RBAC check uses a different identity in /api/capabilities than in requireHelmWrite, so the UI shows an enabled Upgrade control that always 403s. See KNOWN-ISSUES.md.',
-  );
   test.setTimeout(150_000);
 
   await page.goto('/');
@@ -243,19 +220,14 @@ test('upgrading a release from the Values editor changes the cluster and advance
   const history = releaseHistory();
   expect(history.length, `helm history for "${RELEASE}" is still 1 entry - no new revision was created`).toBeGreaterThan(1);
 
-  await captureSurface(page, testInfo, 'helm-upgrade-refused');
+  await captureSurface(page, testInfo, 'helm-upgrade');
 });
 
 test('rolling back a release from History reverts the cluster to the previous revision', async ({ page }, testInfo) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 3: Helm write RBAC check uses a different identity in /api/capabilities than in requireHelmWrite, so the UI shows an enabled Rollback control that always 403s. See KNOWN-ISSUES.md.',
-  );
   test.setTimeout(150_000);
 
-  // Independent of whether the upgrade test above actually advanced the
-  // release (it is expected not to, in this environment) - rollback needs a
-  // revision to roll back FROM. Created directly with the CLI, not through
+  // Rollback also works when run alone: ensure there is a revision to roll
+  // back from. Created directly with the CLI, not through
   // the UI: this is fixture setup, not the write path under test.
   if (releaseHistory().length < 2) {
     helm('-n', NAMESPACE, 'upgrade', RELEASE, chartPath, '--set', `message=${V2_MESSAGE}`, '--wait', '--timeout=120s');
@@ -313,5 +285,5 @@ test('rolling back a release from History reverts the cluster to the previous re
   const after = releaseHistory();
   expect(after[after.length - 1].status, 'the newest revision after rollback is not "deployed"').toBe('deployed');
 
-  await captureSurface(page, testInfo, 'helm-rollback-refused');
+  await captureSurface(page, testInfo, 'helm-rollback');
 });
