@@ -126,12 +126,21 @@ test.describe('MCP over the hub', () => {
       });
       expect(initRes.status(), 'mcp initialize with a freshly minted PAT').toBe(200);
       const sessionId = initRes.headers()['mcp-session-id'];
-      expect(sessionId, 'initialize response is missing the Mcp-Session-Id header').toBeTruthy();
       const initBody = parseRPC(await initRes.text());
       expect(initBody.error, `initialize returned a JSON-RPC error: ${JSON.stringify(initBody.error)}`).toBeUndefined();
       expect(initBody.result?.capabilities?.tools, 'initialize result has no tools capability').toBeTruthy();
+      const protocolVersion: unknown = initBody.result?.protocolVersion;
+      if (typeof protocolVersion !== 'string') {
+        throw new Error('MCP initialize did not return a protocol version');
+      }
 
-      const sessionHeaders = { ...authHeaders, 'Mcp-Session-Id': sessionId };
+      // Released hubs may issue a session; main uses stateless Streamable HTTP.
+      // Both negotiate the protocol version during initialize.
+      const sessionHeaders = {
+        ...authHeaders,
+        'MCP-Protocol-Version': protocolVersion,
+        ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
+      };
 
       // notifications/initialized is a JSON-RPC notification (no id) - the
       // SDK expects the client to send it before any other call on a fresh

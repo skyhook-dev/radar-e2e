@@ -17,8 +17,6 @@ test.setTimeout(240_000);
 type Member = { user_id: string; email: string; role: string };
 type Rule = { id: string; name: string; enabled: boolean; inbox_enabled?: boolean };
 
-const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
-
 async function org(page: Page): Promise<{ id: string; name: string }> {
   return page.evaluate(async () => {
     const res = await fetch('/api/orgs');
@@ -47,7 +45,7 @@ test.beforeEach(async ({ page }) => {
   await assertClusterConnected(page);
 });
 
-test('the organisation page shows the org and every member the hub records', async ({ page }, testInfo) => {
+test('organization settings and members match the hub records', async ({ page }, testInfo) => {
   const { id, name } = await org(page);
   expect(id, 'the hub reports no organisation').not.toBe('');
 
@@ -55,25 +53,21 @@ test('the organisation page shows the org and every member the hub records', asy
   expect(members.length, 'the hub records no members, so the page cannot be checked').toBeGreaterThan(0);
 
   await gotoWhenNotRateLimited(page, '/settings/organization');
-  await expect
-    .poll(async () => (await bodyText(page)).length, { timeout: 60_000, intervals: [1000, 2000, 3000] })
-    .toBeGreaterThan(300);
+  await expect(
+    page.locator('form').getByRole('textbox').first(),
+    'the organization name field does not match the hub record',
+  ).toHaveValue(name);
 
-  const text = await bodyText(page);
-  expect.soft(text, `the organisation page does not name the org (${name})`).toContain(name);
+  await gotoWhenNotRateLimited(page, '/settings/organization/members');
 
   // Every member, with the role they actually hold. A page that lists people
   // but not their roles cannot answer "who can do this".
   for (const member of members) {
-    expect
-      .soft(text, `the hub records ${member.email} as a member but the page does not list them`)
-      .toContain(member.email);
-    expect
-      .soft(
-        text.toLowerCase(),
-        `the page lists ${member.email} but not the role the hub gives them (${member.role})`,
-      )
-      .toContain(member.role.toLowerCase());
+    const row = page.getByRole('table').first().getByRole('row').filter({ hasText: member.email });
+    await expect(row, `the members table does not list ${member.email}`).toBeVisible();
+    await expect(row, `the members table gives ${member.email} the wrong role`).toContainText(member.role, {
+      ignoreCase: true,
+    });
   }
 
   await captureSurface(page, testInfo, 'org-members-truth');
@@ -85,15 +79,13 @@ test('the alert rules the hub stores are the rules the product shows', async ({ 
   test.skip(rules.length === 0, 'this org has no alert rules to compare');
 
   await gotoWhenNotRateLimited(page, '/alerts');
-  await expect
-    .poll(async () => (await bodyText(page)).length, { timeout: 60_000, intervals: [1000, 2000, 3000] })
-    .toBeGreaterThan(300);
-
-  const text = await bodyText(page);
+  await page.getByRole('link', { name: 'Manage rules', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/organization\/notifications$/);
   for (const rule of rules) {
-    expect
-      .soft(text, `the hub stores an alert rule called "${rule.name}" but the Alerts page does not show it`)
-      .toContain(rule.name);
+    await expect(
+      page.getByText(rule.name, { exact: true }),
+      `the hub stores an alert rule called "${rule.name}" but notification settings do not show it`,
+    ).toBeVisible();
   }
 
   // Whether a rule delivers to the inbox is what decides if anyone is told

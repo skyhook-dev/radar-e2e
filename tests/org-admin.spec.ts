@@ -35,14 +35,15 @@ async function currentOrgId(page: Page): Promise<string> {
   return account.current_org_id as string;
 }
 
-/** GET /api/orgs and return this org's real, live name - never hardcoded. */
-async function currentOrgName(page: Page, orgId: string): Promise<string> {
+/** Read the current organization's name and default invitation role. */
+async function currentOrg(page: Page, orgId: string): Promise<{ name: string; default_invite_role: string }> {
   const res = await page.request.get('/api/orgs');
   expect(res.status(), 'orgs endpoint').toBe(200);
-  const orgs = (await res.json()) as Array<{ id: string; name: string }>;
+  const orgs: Array<{ id: string; name: string; default_invite_role: string }> = await res.json();
   const org = orgs.find((o) => o.id === orgId);
   expect(org, `org ${orgId} is not in GET /api/orgs`).toBeTruthy();
-  return org!.name;
+  if (!org) throw new Error('Current organization is missing from /api/orgs');
+  return org;
 }
 
 const hubUrl = process.env.HUB_URL ?? 'http://localhost:18080';
@@ -51,25 +52,34 @@ test(
   'an owner can invite a teammate; the unauthenticated preview shows the real org and role, and a mismatched-email account is refused without being told who the invite was for',
   async ({ page }, testInfo) => {
     const orgId = await currentOrgId(page);
-    const orgName = await currentOrgName(page, orgId);
+    const org = await currentOrg(page, orgId);
+    const orgName = org.name;
 
-    // A non-default role (org's default_invite_role is "member" on this
-    // stack) so the preview assertion below proves the role that was
-    // actually submitted, not just whatever the default happens to be.
     const inviteEmail = `e2e-org-admin-invitee-${Date.now()}@example.com`;
-    const inviteRole = 'Viewer';
+    let inviteRole = 'viewer';
 
     await page.goto('/settings/organization/members');
     await expect(page.getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
 
     await page.getByRole('textbox', { name: 'Invite emails', exact: true }).fill(inviteEmail);
-    await page.getByRole('combobox', { name: 'Invitation role' }).click();
-    await page.getByRole('option').filter({ hasText: inviteRole }).first().click();
+    const rolePicker = page.getByRole('combobox', { name: 'Invitation role' });
+    if (await rolePicker.isVisible()) {
+      await rolePicker.click();
+      await page.getByRole('option', { name: 'Viewer', exact: true }).click();
+    } else {
+      // Self-managed hubs now use the org's default role, matching SSO joins.
+      const configRes = await page.request.get('/api/config');
+      expect(configRes.status()).toBe(200);
+      expect((await configRes.json()).mode).toBe('self_hosted');
+      inviteRole = org.default_invite_role;
+      expect(['owner', 'member', 'viewer']).toContain(inviteRole);
+      await expect(page.getByText(`They join as ${inviteRole.charAt(0).toUpperCase() + inviteRole.slice(1)},`, { exact: false })).toBeVisible();
+    }
 
     const createResponsePromise = page.waitForResponse(
       (res) => res.url().includes(`/api/orgs/${orgId}/invitations`) && res.request().method() === 'POST',
     );
-    await page.getByRole('button', { name: 'Send invite', exact: true }).click();
+    await page.getByRole('button', { name: /^(Send invite|Create invite|Invite)$/ }).click();
     const createResponse = await createResponsePromise;
     expect(createResponse.status(), 'creating an invitation via the UI').toBe(200);
     const result = await createResponse.json();
@@ -89,14 +99,14 @@ test(
     const code: string = invitation.id;
     expect(code, 'the saved invitation has no id').toBeTruthy();
     try {
-      expect(invitation.role, 'the saved invitation has the wrong role').toBe('viewer');
+      expect(invitation.role, 'the saved invitation has the wrong role').toBe(inviteRole);
       await expect(
         page.getByRole('status').filter({ hasText: /^Invited 1\b/ }),
         'the members page never confirmed the invitation',
       ).toBeVisible();
       const pendingRow = page.getByRole('row').filter({ has: page.getByRole('cell', { name: inviteEmail, exact: true }) });
       await expect(pendingRow, 'the pending invitation never appeared in the members table').toBeVisible();
-      await expect(pendingRow.getByRole('cell', { name: 'viewer', exact: true })).toBeVisible();
+      await expect(pendingRow.getByRole('cell', { name: inviteRole, exact: true })).toBeVisible();
       await captureSurface(page, testInfo, 'invite-created');
 
       // ---- unauthenticated preview: real "no session" context, not the
@@ -114,7 +124,7 @@ test(
         expect(previewRes.status(), 'unauthenticated preview of a freshly created invite').toBe(200);
         const preview = await previewRes.json();
         expect(preview.org_name, 'preview does not name the real org').toBe(orgName);
-        expect(preview.role, 'preview does not carry the role it was created with').toBe('viewer');
+        expect(preview.role, 'preview does not carry the role it was created with').toBe(inviteRole);
         expect(preview.email, 'preview does not carry the invited email').toBe(inviteEmail);
         expect(preview.accepted, 'a fresh invitation must not preview as already accepted').toBe(false);
       } finally {
