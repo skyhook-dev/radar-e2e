@@ -150,9 +150,11 @@ test('an alert rule can be created through the UI, appears in the rules list, an
   await page.goto('/settings/organization/notifications');
   // The alert-rules section was renamed "Alert rules" on web main (it reads
   // "Issue notifications" on the released hub); both render it as a level-2
-  // heading, and both variants run this test.
+  // heading, and both variants run this test. Matched as a substring, not an
+  // anchored exact name: the heading also carries a scope chip ("Owners &
+  // members"), so its accessible name is e.g. "Alert rules Owners & members".
   await expect(
-    page.getByRole('heading', { name: /^(Issue notifications|Alert rules)$/, level: 2 }),
+    page.getByRole('heading', { name: /Issue notifications|Alert rules/i, level: 2 }).first(),
   ).toBeVisible();
 
   // The section shows "Add rule" once any rule exists (every org ships a
