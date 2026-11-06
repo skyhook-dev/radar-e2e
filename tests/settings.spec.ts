@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { adminEmail, captureSurface } from './helpers';
+import { adminEmail, breakGlassCanMintPAT, breakGlassLabel, captureSurface } from './helpers';
 
 // Hub administration surface: Members, Audit log, Personal access tokens,
 // and self-hosted license status. Unlike timeline.spec.ts / helm.spec.ts
@@ -45,15 +45,22 @@ test('the bootstrap admin appears as a member with the owner role', async ({ pag
   expect(adminMember, `${adminEmail} is not in /api/orgs/${orgId}/members at all`).toBeTruthy();
   expect(adminMember.role, `${adminEmail} has role "${adminMember.role}", expected owner`).toBe('owner');
 
+  // The Members table renders the break-glass admin as "Break-glass admin"
+  // rather than its email on web main (radar-hub-web, which also marks the row
+  // with break_glass in the API). The released hub still shows the email, and
+  // both variants run this test - so the row is located by whichever identity
+  // this hub uses for it.
+  const rowText = adminMember.break_glass ? breakGlassLabel : adminEmail;
+
   await page.goto('/settings/organization/members');
   const table = page.getByRole('table').first();
   await expect(table, 'Members table never rendered').toBeVisible();
 
-  const row = table.getByRole('row').filter({ hasText: adminEmail });
-  await expect(row.first(), `no Members row for ${adminEmail}`).toBeVisible();
+  const row = table.getByRole('row').filter({ hasText: rowText });
+  await expect(row.first(), `no Members row for ${rowText}`).toBeVisible();
   await expect(
     row.first(),
-    `Members page shows a row for ${adminEmail} but it doesn't say "owner"`,
+    `Members page shows a row for ${rowText} but it doesn't say "owner"`,
   ).toContainText('owner');
 
   await captureSurface(page, testInfo, 'members-owner-role');
@@ -66,6 +73,28 @@ test(
 
     await page.goto('/agents');
     await expect(page.getByRole('heading', { name: 'Agents', level: 1 })).toBeVisible();
+
+    // radar-hub #384: a break-glass sign-in can no longer mint a PAT (it would
+    // outlive the break-glass config). This suite has no SSO, so on a hub
+    // carrying that fix the PAT controls are gone and the panel says why; the
+    // released hub still offers them. Detect which hub this is and hold each to
+    // what it actually does: on the strict hub, assert the refusal is stated
+    // plainly and there is nothing to mint; on the permissive hub, run the full
+    // mint/revoke/audit lifecycle below.
+    const canMint = (await breakGlassCanMintPAT(page)).allowed;
+    if (!canMint) {
+      const refusal = page.getByText(/can.t create personal access tokens/i);
+      await expect(
+        refusal,
+        'the Agents page offers no PAT minting for break-glass, but also never says why',
+      ).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Personal Access Token' }),
+        'break-glass cannot mint a PAT, yet the Agents page still offers the PAT control',
+      ).toHaveCount(0);
+      await captureSurface(page, testInfo, 'agents-pat-unavailable-breakglass');
+      return;
+    }
 
     // --- mint, via the UI ---
     // The panel defaults to the OAuth tab (it's the recommended path for

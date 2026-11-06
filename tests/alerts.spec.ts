@@ -148,7 +148,12 @@ test('an alert rule can be created through the UI, appears in the rules list, an
   const ruleName = `E2E create rule ${Date.now()}`;
 
   await page.goto('/settings/organization/notifications');
-  await expect(page.getByRole('heading', { name: 'Issue notifications', level: 2 })).toBeVisible();
+  // The alert-rules section was renamed "Alert rules" on web main (it reads
+  // "Issue notifications" on the released hub); both render it as a level-2
+  // heading, and both variants run this test.
+  await expect(
+    page.getByRole('heading', { name: /^(Issue notifications|Alert rules)$/, level: 2 }),
+  ).toBeVisible();
 
   // The section shows "Add rule" once any rule exists (every org ships a
   // default critical-issues rule) or "Custom rule" on a genuinely empty
@@ -159,13 +164,16 @@ test('an alert rule can be created through the UI, appears in the rules list, an
 
   // Identify the rule dialog by the field only it has, so a second dialog
   // stacked on top of it (see the consent gate below) can never make this
-  // ambiguous.
+  // ambiguous. The rule-name field's placeholder was reworded on web main
+  // ("e.g. Critical issues in production") from the released hub's ("Notify on
+  // critical issues"); match either.
+  const ruleNamePlaceholder = /Notify on critical issues|Critical issues in production/;
   const dialog = page
     .getByRole('dialog')
-    .filter({ has: page.getByPlaceholder('Notify on critical issues') });
+    .filter({ has: page.getByPlaceholder(ruleNamePlaceholder) });
   await expect(dialog, 'rule dialog never opened').toBeVisible();
 
-  await dialog.getByPlaceholder('Notify on critical issues').fill(ruleName);
+  await dialog.getByPlaceholder(ruleNamePlaceholder).fill(ruleName);
   // Scope to our own namespace so this rule can never fire on another
   // agent's workload elsewhere in the shared cluster.
   await dialog.getByPlaceholder('all namespaces').fill(NAMESPACE);
@@ -191,10 +199,16 @@ test('an alert rule can be created through the UI, appears in the rules list, an
       throw new Error(`rule "${ruleName}" is in the rules list but missing from GET .../alerts/rules`);
     }
     ruleId = apiRule.id;
-    await expect(
-      row.first(),
-      `the rules list row for "${ruleName}" does not show the id of the rule the server stored (${ruleId})`,
-    ).toContainText(ruleId);
+    // The row must reference the id of the rule the server stored. The released
+    // hub prints the id as visible text; web main moved it into the row's title
+    // tooltip (the row shows the rule name). The row is already pinned to our
+    // unique rule name, so finding the id anywhere in that row's markup - text
+    // or title - proves it is this rule and not optimistic UI.
+    const rowHtml = await row.first().evaluate((el) => el.outerHTML);
+    expect(
+      rowHtml.includes(ruleId),
+      `the rules list row for "${ruleName}" does not reference the id of the rule the server stored (${ruleId})`,
+    ).toBe(true);
 
     // Survives a page load: a full navigation (not a reload inside a poll
     // loop), then the row must still be there without any client-side help.

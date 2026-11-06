@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateLimited } from './helpers';
+import { assertClusterConnected, authStatePath, breakGlassLabel, captureSurface, gotoWhenNotRateLimited } from './helpers';
 
 // Organisation and settings pages, held to the hub's own records.
 //
@@ -14,7 +14,7 @@ import { assertClusterConnected, authStatePath, captureSurface, gotoWhenNotRateL
 test.use({ storageState: authStatePath });
 test.setTimeout(240_000);
 
-type Member = { user_id: string; email: string; role: string };
+type Member = { user_id: string; email: string; role: string; break_glass?: boolean };
 type Rule = { id: string; name: string; enabled: boolean; inbox_enabled?: boolean };
 
 async function org(page: Page): Promise<{ id: string; name: string }> {
@@ -63,9 +63,14 @@ test('organization settings and members match the hub records', async ({ page },
   // Every member, with the role they actually hold. A page that lists people
   // but not their roles cannot answer "who can do this".
   for (const member of members) {
-    const row = page.getByRole('table').first().getByRole('row').filter({ hasText: member.email });
-    await expect(row, `the members table does not list ${member.email}`).toBeVisible();
-    await expect(row, `the members table gives ${member.email} the wrong role`).toContainText(member.role, {
+    // Web main renders the break-glass admin as "Break-glass admin" instead of
+    // its email (and marks the row with break_glass in the API); the released
+    // hub shows the email. Both variants run this test, so each row is located
+    // by whichever identity this hub uses for it.
+    const rowText = member.break_glass ? breakGlassLabel : member.email;
+    const row = page.getByRole('table').first().getByRole('row').filter({ hasText: rowText });
+    await expect(row, `the members table does not list ${rowText}`).toBeVisible();
+    await expect(row, `the members table gives ${rowText} the wrong role`).toContainText(member.role, {
       ignoreCase: true,
     });
   }
@@ -80,7 +85,9 @@ test('the alert rules the hub stores are the rules the product shows', async ({ 
 
   await gotoWhenNotRateLimited(page, '/alerts');
   await page.getByRole('link', { name: 'Manage rules', exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\/organization\/notifications$/);
+  // Web main deep-links to the rules section with a #issue-notifications anchor;
+  // the released hub lands on the bare path. Accept either.
+  await expect(page).toHaveURL(/\/settings\/organization\/notifications(?:#.*)?$/);
   for (const rule of rules) {
     await expect(
       page.getByText(rule.name, { exact: true }),

@@ -1,5 +1,5 @@
 import { test, expect, request as playwrightRequest, type APIRequestContext } from '@playwright/test';
-import { clusterId, kubectl } from './helpers';
+import { breakGlassCanMintPAT, clusterId, kubectl } from './helpers';
 
 // MCP through the hub: this is the surface AI agents (Claude Desktop, Cursor,
 // Claude Code) actually use to query a customer's cluster - a personal access
@@ -104,6 +104,20 @@ test.describe('MCP over the hub', () => {
   });
 
   test('mints a PAT, speaks MCP through the hub, and list_namespaces matches kubectl', { tag: '@sanity' }, async ({ page }, testInfo) => {
+    // radar-hub #384: a break-glass sign-in can no longer mint a PAT, and this
+    // suite has no identity provider to sign in any other way. The whole
+    // positive path here needs a real PAT to speak MCP, so on a hub carrying
+    // that fix it cannot be exercised at all - skip it with the reason rather
+    // than fail. The released hub still mints, and the negative-path test below
+    // (bad/missing tokens) runs on every hub regardless. To restore this on
+    // main, the harness would need to stand up an SSO provider and mint through
+    // it.
+    const cap = await breakGlassCanMintPAT(page);
+    test.skip(
+      !cap.allowed,
+      `this hub refuses break-glass PAT minting (POST /api/pats -> ${cap.status}); the MCP-over-hub positive path needs a PAT that only an SSO sign-in can create here - radar-hub #384`,
+    );
+
     const tokenName = `e2e-mcp-${Date.now()}`;
     const { id: patId, token } = await mintPAT(page, tokenName);
 
