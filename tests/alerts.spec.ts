@@ -126,11 +126,27 @@ test.beforeAll(() => {
 // caller still asserts that the dialogs are gone afterwards; this only gets
 // them there.
 async function allowAnalysisIfAsked(page: Page) {
-  const allow = page.getByRole('button', { name: 'Allow automatic analysis' });
+  // After "Create rule", one of three things happens, and the wording differs
+  // between the released hub and web main:
+  //  - the rule just saves and every dialog closes (the org already consented,
+  //    or a build with no AI-analysis gate);
+  //  - an AI-analysis consent gate appears. The released hub labels its accept
+  //    button "Allow automatic analysis"; web main raises a consent dialog that
+  //    offers "Turn on AI analysis" (grant org consent and save) or "Create
+  //    without analysis" (save the rule with analysis off, no org-wide consent).
+  // This test only cares that the rule gets created, not about AI consent, so it
+  // takes whichever button creates the rule - preferring the one that does NOT
+  // grant the shared org AI consent as a side effect.
+  const createWithout = page.getByRole('button', { name: /(Create|Save) without analysis/i });
+  const allow = page.getByRole('button', { name: /Allow automatic analysis|Turn on AI analysis/i });
+  const gateUp = async () =>
+    (await createWithout.first().isVisible().catch(() => false)) ||
+    (await allow.first().isVisible().catch(() => false));
+
   await expect
     .poll(
       async () => {
-        if (await allow.isVisible()) return 'gate';
+        if (await gateUp()) return 'gate';
         return (await page.getByRole('dialog').count()) === 0 ? 'saved' : 'open';
       },
       { message: 'Create rule neither saved the rule nor raised the AI analysis disclosure' },
@@ -138,7 +154,11 @@ async function allowAnalysisIfAsked(page: Page) {
     .not.toBe('open');
 
   // Nothing dismisses the gate on its own, so once it is up the click is safe.
-  if (await allow.isVisible()) await allow.click();
+  if (await createWithout.first().isVisible().catch(() => false)) {
+    await createWithout.first().click();
+  } else if (await allow.first().isVisible().catch(() => false)) {
+    await allow.first().click();
+  }
 }
 
 test('an alert rule can be created through the UI, appears in the rules list, and survives a page load', async ({
