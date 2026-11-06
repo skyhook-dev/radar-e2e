@@ -13,81 +13,26 @@ can follow.
 
 ---
 
-## 1. Fleet views inherit a single cluster's namespace pick
+## 1. Fleet views inherit a single cluster's namespace pick — RESOLVED & RELEASED
 
-**Confirmed** 2026-08-12. Test: `tests/known-issues.spec.ts`.
-
-Narrowing the namespace switcher in any single-cluster view silently scopes the
-**fleet-wide** pages to that namespace, across every cluster. Nothing in the
-fleet UI indicates a filter is applied, so the product's core "what is broken
-right now" surface can report an all-clear while a critical issue is live in
-another namespace.
-
-Affected surfaces (all four verified in source; Issues and Search additionally
-reproduced end-to-end):
-
-| Fleet surface | Upstream call | Sends a namespace or `globalNs`? |
-|---|---|---|
-| Issues | `/api/issues` | no |
-| Search | `/api/search` | no |
-| Applications | `/api/applications` | no |
-| Packages | `/api/packages` | no |
-
-Every one of those radar handlers resolves its namespace list through
-`parseNamespacesForUser`, which falls back to the saved pick. So this is not an
-Issues bug - it is every fleet aggregation.
-
-Reproduction (needs a >5s gap - the fleet fan-out caches responses for 5s, and
-without the gap it looks like there is no bug):
-
-```bash
-# a broken workload in some namespace, detected fleet-wide in ~1s
-kubectl -n other-ns create deployment broken --image=registry.invalid.example/nope:v1
-
-curl -b jar -X POST -H 'X-Hub-Auth: 1' -H 'Content-Type: application/json' \
-  "$HUB/c/$CLUSTER_ID/api/cluster/namespace" -d '{"namespaces":["some-other-namespace"]}'
-sleep 12
-curl -b jar "$HUB/api/fleet/issues"            # 0 issues, fleet-wide
-curl -b jar "$HUB/api/fleet/search?q=broken"   # 0 hits
-
-curl -b jar -X POST -H 'X-Hub-Auth: 1' -H 'Content-Type: application/json' \
-  "$HUB/c/$CLUSTER_ID/api/cluster/namespace" -d '{"namespaces":[]}'
-sleep 12
-curl -b jar "$HUB/api/fleet/issues"            # the issue is back
-```
-
-Mechanism:
-
-- radar's `parseNamespacesForUser` (`internal/server/server.go`) falls back to
-  the caller's saved namespace-switcher pick when a request carries no explicit
-  namespace, and scopes the read to it. The issues handler uses that fallback.
-- radar's search handler accepts `globalNs=1` to bypass exactly this - its own
-  comment says the omnibar sets it "so a deliberately broad lookup isn't
-  silently narrowed".
-- radar-hub's fleet fan-out (`internal/server/fleet_handlers.go`) sends neither
-  a namespace nor `globalNs`, so every fleet read inherits the pick.
-
-A per-cluster view honouring the pick is intended. A fleet view inheriting one
-cluster's cosmetic filter is not.
+**Confirmed** 2026-08-12. **Fixed & released** 2026-11: radar-hub sends
+`globalNs=1` on the fleet fan-out (#308, released v1.12.0+) and radar no longer
+lets REST reads inherit the saved namespace pick (#2067, released v1.18.0+). The
+pin is removed; `tests/known-issues.spec.ts` now keeps a normal regression test
+that the fleet view stays fleet-wide (green on both the main and published legs).
 
 ---
 
-## 2. `/api/auth/dev-signin` is mounted regardless of the dev-bypass setting
+## 2. `/api/auth/dev-signin` is mounted regardless of the dev-bypass setting — FIXED IN MAIN, PENDING RELEASE
 
-**Confirmed** 2026-08-12. Test: `tests/known-issues.spec.ts`.
+**Confirmed** 2026-08-12. **Fixed in main, not yet released**: radar-hub #384
+makes the handler answer 404 unless dev bypass is on. The fix is radar-hub-only
+(no radar side) and is not in any release yet (latest is v1.14.1).
 
-The dev-bypass sign-in route is registered unconditionally, although its own
-doc comment states it is "Only registered when DevBypass is on". The session it
-issues cannot authenticate anything, so this is **not** an authentication
-bypass - but the endpoint should not be reachable on a hub that has dev bypass
-disabled.
-
-Details, impact assessment and the reproduction are deliberately NOT in this
-file: this repository is public and the issue is unfixed. They are recorded in
-the internal defect list held with the effort notes, and should move to the
-private tracker.
-
-Fix: register the route inside the `DevBypass` conditional, as documented.
+`tests/known-issues.spec.ts` now asserts the fix (expects 404). It passes on the
+`main` leg and is **expected to stay RED on the `published` leg until the next
+radar-hub release ships #384**, at which point it goes green automatically with
+no change here. Remove this entry once that release is out.
 
 ---
 
