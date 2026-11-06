@@ -86,10 +86,20 @@ test('the install wizard names the hub\'s in-cluster address for a cluster next 
   page,
 }, testInfo) => {
   await page.goto('/install');
+  // /install now opens on a "how are you connecting?" chooser (ConnectChooser);
+  // the single-cluster form with the "Cluster name" field only renders after
+  // picking "One cluster". The chooser and the form share the "Connect a
+  // cluster" heading, so the old heading check passed on the chooser while the
+  // field never appeared. Wait for whichever screen actually rendered, then take
+  // the single-cluster path when the chooser is the one shown.
+  const oneCluster = page.getByTestId('connect-one');
+  const nameField = page.getByLabel('Cluster name');
+  await expect(oneCluster.or(nameField).first(), 'neither the connect chooser nor the cluster-name form rendered').toBeVisible();
+  if (await oneCluster.isVisible().catch(() => false)) await oneCluster.click();
   await expect(page.getByRole('heading', { name: 'Connect a cluster' })).toBeVisible();
 
   const clusterName = `e2e-onboarding-wizard-${Date.now()}`;
-  await page.getByLabel('Cluster name').fill(clusterName);
+  await nameField.fill(clusterName);
   await page.getByRole('radio', { name: 'In the same cluster as the hub' }).click();
   await page.getByRole('button', { name: 'Generate install command' }).click();
 

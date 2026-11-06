@@ -45,11 +45,13 @@ test.afterAll(async () => {
   kubectl('-n', NAMESPACE, 'delete', 'deployment', WORKLOAD, '--ignore-not-found', '--wait=false');
 });
 
-test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page }, testInfo) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 1: the hub fleet fan-out sends no namespace and no globalNs, so fleet reads inherit the per-user namespace-switcher pick. See KNOWN-ISSUES.md.',
-  );
+// Was KNOWN ISSUE 1 (fleet reads inheriting one cluster's namespace pick), now
+// fixed and released on both legs: the hub fleet fan-out sends globalNs=1
+// (radar-hub #308, released v1.12.0+) and radar no longer lets REST reads
+// inherit the saved pick (radar #2067, released v1.18.0+). Kept as a normal
+// regression test that the fleet view stays fleet-wide; it turns red again if
+// either side regresses.
+test('fleet Issues is not narrowed by a single cluster\'s namespace pick', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
 
   await page.goto('/');
@@ -100,12 +102,13 @@ test('fleet Issues ignores a single cluster\'s namespace pick', async ({ page },
   ).toBe(true);
 });
 
+// Was KNOWN ISSUE 2: /api/auth/dev-signin was mounted unconditionally, so an
+// unauthenticated caller could create user rows on any hub. Fixed in radar-hub
+// #384 (the handler returns 404 unless dev bypass is on) - but that fix is NOT
+// in a release yet (latest is v1.14.1), so this asserts the fix and is expected
+// to pass on the `main` leg and to stay RED on the `published` leg until the
+// next radar-hub release ships #384, which auto-greens it with no change here.
 test('the dev-bypass sign-in endpoint is not exposed when dev bypass is off', async ({ page }) => {
-  test.fail(
-    true,
-    'KNOWN ISSUE 2: /api/auth/dev-signin is mounted unconditionally, so an unauthenticated caller can create user rows on any hub. See KNOWN-ISSUES.md.',
-  );
-
   // Deliberately session-less: a Playwright API context inherits the project's
   // saved admin session unless storage state is cleared, which would make this
   // pass for entirely the wrong reason.
@@ -115,13 +118,19 @@ test('the dev-bypass sign-in endpoint is not exposed when dev bypass is off', as
   });
   const res = await anonymous.post('/api/auth/dev-signin', {
     headers: { 'X-Hub-Auth': '1' },
+    // Don't follow redirects: a 3xx landing on some unrelated 404 must not count
+    // as the endpoint being gated. We want the endpoint's own status.
+    maxRedirects: 0,
     data: { email: `unauthenticated-probe-${Date.now()}@example.invalid` },
   });
   const status = res.status();
   await anonymous.dispose();
 
+  // 404 specifically (the handler's "dev bypass is off" guard), not merely
+  // "not 200" - a 429 from rate-limiting or a 500 would otherwise masquerade as
+  // the endpoint being disabled.
   expect(
     status,
-    'an unauthenticated caller reached the dev-bypass sign-in endpoint on a hub with dev bypass disabled, and the hub created a user row for the address it supplied',
-  ).not.toBe(200);
+    'POST /api/auth/dev-signin should be 404 when dev bypass is off; any other status means the unauthenticated user-creation endpoint is still reachable',
+  ).toBe(404);
 });
