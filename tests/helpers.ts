@@ -90,6 +90,47 @@ export async function signInAsAdmin(page: Page) {
   await expect(page).not.toHaveURL(/\/login/);
 }
 
+/** The label the Members table and Agents page use in place of the break-glass admin's email. */
+export const breakGlassLabel = 'Break-glass admin';
+
+export type PATMintCapability = { allowed: boolean; status: number; message: string };
+
+/**
+ * Whether this hub lets the signed-in break-glass admin mint a personal access
+ * token.
+ *
+ * radar-hub #384 closed a security gap: a break-glass sign-in can no longer
+ * mint access tokens - a token would outlive the break-glass config, so the hub
+ * refuses it ("Break-glass sign-in can't create access tokens. Sign in with SSO
+ * to create one."). This suite has no identity provider, so it signs in
+ * break-glass for everything; on a hub carrying that fix no PAT can be minted
+ * here at all, while the released hub the `published` variant installs still
+ * allows it. Both run this suite, so the PAT scenarios detect which rule is in
+ * force rather than assuming one.
+ *
+ * Detected by asking the hub, not by guessing the version: POST a throwaway
+ * token. 201 -> allowed (the probe token is revoked straight away so nothing is
+ * left behind in the shared org); 403 -> refused. Any other status is returned
+ * as-is for the caller to surface rather than swallow.
+ */
+export async function breakGlassCanMintPAT(page: Page): Promise<PATMintCapability> {
+  const res = await page.request.post('/api/pats', {
+    headers: { 'X-Hub-Auth': '1' },
+    data: { name: `e2e-pat-probe-${Date.now()}` },
+  });
+  const status = res.status();
+  if (status === 201) {
+    const body = await res.json().catch(() => ({}) as Record<string, unknown>);
+    const id = (body as { pat?: { id?: string } }).pat?.id;
+    if (id) {
+      await page.request.delete(`/api/pats/${id}`, { headers: { 'X-Hub-Auth': '1' } }).catch(() => {});
+    }
+    return { allowed: true, status, message: '' };
+  }
+  const message = await res.text().catch(() => '');
+  return { allowed: false, status, message };
+}
+
 /**
  * Fail early, and differently, when the cluster is not connected. Without this
  * a dead tunnel and a broken timeline both surface as "no events" - and the

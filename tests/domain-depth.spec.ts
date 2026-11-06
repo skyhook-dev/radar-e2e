@@ -168,12 +168,41 @@ test('every domain search box actually filters what it shows', async ({ page }, 
   }
 });
 
-/** State tabs that partition a domain's items, read off the running product. */
-const STATE_TABS: { path: string; domain: string; tabs: string[] }[] = [
-  { path: '/issues', domain: 'Issues', tabs: ['Open', 'Snoozed', 'Dismissed', 'All'] },
-  { path: '/checks', domain: 'Checks', tabs: ['Open', 'Snoozed', 'Dismissed', 'All'] },
-  { path: '/alerts', domain: 'Alerts', tabs: ['All', 'Open', 'Resolved'] },
+/**
+ * A state filter to exercise on a domain page.
+ *
+ * `key` is the stable label used in messages and to pair screenshots; `match`
+ * is the accessible-name pattern used to find the control, so one entry can
+ * cover a control whose wording differs between the released hub and web main.
+ * `optional` marks a filter that only some hubs render, so its absence is not a
+ * finding.
+ */
+type StateTab = { key: string; match: RegExp; optional?: boolean };
+const tab = (name: string): StateTab => ({ key: name, match: new RegExp(`^\\s*${name}\\b`, 'i') });
+
+/** State filters that partition a domain's items, read off the running product. */
+const STATE_TABS: { path: string; domain: string; tabs: StateTab[] }[] = [
+  { path: '/issues', domain: 'Issues', tabs: [tab('Open'), tab('Snoozed'), tab('Dismissed'), tab('All')] },
+  { path: '/checks', domain: 'Checks', tabs: [tab('Open'), tab('Snoozed'), tab('Dismissed'), tab('All')] },
+  // The Alerts page was rebuilt on web main into tabs ("Open alerts" / "Closed",
+  // plus "All notifications" only on hubs with the alert stream) where the
+  // released hub renders buttons ("All" / "Open" / "Resolved"). Match either
+  // vocabulary, found as a tab OR a button; "All" is capability-gated on main,
+  // so it is optional.
+  {
+    path: '/alerts',
+    domain: 'Alerts',
+    tabs: [
+      { key: 'Open', match: /^\s*Open\b/i },
+      { key: 'Resolved', match: /^\s*(Resolved|Closed)\b/i },
+      { key: 'All', match: /^\s*All\b/i, optional: true },
+    ],
+  },
 ];
+
+/** A state filter rendered either as a tab (web main) or a button (released hub). */
+const stateControl = (page: Page, match: RegExp) =>
+  page.getByRole('tab', { name: match }).or(page.getByRole('button', { name: match })).first();
 
 test('the state filters on a domain page change what it shows', async ({ page }, testInfo) => {
   await page.goto('/');
@@ -191,15 +220,17 @@ test('the state filters on a domain page change what it shows', async ({ page },
 
     const seen = new Map<string, string>();
     let previous = '';
-    for (const tab of tabs) {
-      const control = page.getByRole('button', { name: new RegExp(`^\\s*${tab}\\b`, 'i') }).first();
+    for (const st of tabs) {
+      const control = stateControl(page, st.match);
       // Waited, not sampled - see the note on the search control above.
       const there = await expect(control)
         .toBeVisible({ timeout: 20_000 })
         .then(() => true)
         .catch(() => false);
+      // A capability-gated filter that this hub doesn't render is not a finding.
+      if (!there && st.optional) continue;
       expect
-        .soft(there, `${path}: the ${domain} page offers no "${tab}" filter, though the product renders one`)
+        .soft(there, `${path}: the ${domain} page offers no "${st.key}" filter, though the product renders one`)
         .toBe(true);
       if (!there) continue;
 
@@ -225,13 +256,13 @@ test('the state filters on a domain page change what it shows', async ({ page },
       await expect
         .soft(
           page.getByText(/something went wrong|failed to load/i).first(),
-          `${path}: the ${domain} "${tab}" filter rendered an error`,
+          `${path}: the ${domain} "${st.key}" filter rendered an error`,
         )
         .toBeHidden({ timeout: 8_000 });
 
-      seen.set(tab, text);
+      seen.set(st.key, text);
       previous = text;
-      await captureSurface(page, testInfo, `${domain.toLowerCase()}-filter-${tab.toLowerCase()}`);
+      await captureSurface(page, testInfo, `${domain.toLowerCase()}-filter-${st.key.toLowerCase()}`);
     }
 
     // Put the page back on its default filter before leaving.
@@ -243,7 +274,7 @@ test('the state filters on a domain page change what it shows', async ({ page },
     // shared state has to change it back; the same reasoning the cluster
     // lifecycle spec uses when it puts the agent back.
     const defaultTab = tabs[0];
-    const back = page.getByRole('button', { name: new RegExp(`^\\s*${defaultTab}\\b`, 'i') }).first();
+    const back = stateControl(page, defaultTab.match);
     if (await back.isVisible().catch(() => false)) {
       await back.click().catch(() => {});
     }
